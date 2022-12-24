@@ -164,14 +164,15 @@ fn handle_connection(mut stream: TcpStream) {
 //     writer.write_all(b"\xff\xfd\x05")?; // Supress go ahead
 // }
 
-fn read_until_cr(stream: &mut TcpStream) -> String {
+fn read_until_cr(stream: &TcpStream) -> String {
+    let mut writer = stream;
     let mut buffer = Vec::new();
 
     'outer: loop {
-        stream.flush().unwrap();
+        writer.flush().unwrap();
 
         let mut buf = [0; 1024];
-        let n = stream.read(&mut buf).unwrap();
+        let n = writer.read(&mut buf).unwrap();
 
         if n == 0 {
             return String::from_utf8(buffer).unwrap();
@@ -200,17 +201,17 @@ fn read_until_cr(stream: &mut TcpStream) -> String {
     String::from_utf8(buffer).unwrap()
 }
 
-// fn get_telnet_password(stream: &mut TcpStream) -> io::Result<String> {
-fn get_telnet_password(stream: &mut TcpStream) -> io::Result<String> {
+fn get_telnet_password(stream: &TcpStream) -> io::Result<String> {
     // let mut writer = &mut stream;
-    let writer = stream;
+    let mut writer = stream;
 
     writer.write_all(b"\xff\xfb\x01")?; // Echo
     writer.write_all(b"\xff\xfb\x03")?; // Suppress go ahead
     writer.write_all(b"\xff\xfd\x18")?; // Terminal type
     writer.write_all(b"\xff\xfd\x1f")?; // Terminal speed
 
-    writer.write_all(b"\x0d\x0a")?; // \r\n
+    // writer.write_all(b"\x0d\x0a")?; // \r\n
+    writer.write_all(b"\x0d")?; // \r
     writer.write_all(b"Password: ")?;
     // writer.write_all(b"\x0d\x0a")?; // \r\n
 
@@ -227,10 +228,9 @@ fn get_telnet_password(stream: &mut TcpStream) -> io::Result<String> {
     // let mut password = String::new();
     let mut password = read_until_cr(writer);
     password = password.trim().to_string();
-    info!("Password: {}", password);
 
-    writer.write_all(b"\x0d\x0a")?; // \r\n
-    writer.write_all(b"Password: ")?;
+    // writer.write_all(b"\x0d\x0a")?; // \r\n
+    // writer.write_all(b"Password: ")?;
 
     Ok(password)
 }
@@ -254,12 +254,8 @@ fn handle_telnet_client(stream: TcpStream) -> io::Result<()> {
 
     let password = get_telnet_password(writer).unwrap();
 
-    // Echo back the entered username and password
     info!("Username: {}", username);
     info!("Password: {}", password);
-
-    writeln!(writer, "Username: {}", username).unwrap();
-    writeln!(writer, "Password: {}", password).unwrap();
 
     Ok(())
 }
