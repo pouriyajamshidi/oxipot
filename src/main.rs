@@ -1,63 +1,129 @@
-/*
-[x] I need to press enter to see the banner because of:
-    while match stream.read(&mut data) {
-
-[ ] For password, this could become handy:
-    https://docs.rs/dialoguer/latest/dialoguer/struct.Password.html
-
-[ ] For TTY stuff check this crate:
-        https://docs.rs/termios/0.3.3/termios/
-
-[ ] This one is doing a similar thing:
-    https://stackoverflow.com/questions/52214856/turn-off-echoing-in-terminal-golang
-
-[ ] GNU docs on this:
-    https://www.gnu.org/software/libc/manual/html_node/Mode-Functions.html
-
-[ ] How Go does it:
-    https://pkg.go.dev/golang.org/x/term#Terminal.ReadPassword
-
-[ ] TTY and libc in Rust:
-    https://docs.rs/libc/latest/libc/
-
-[] PTY man page:
-    https://man7.org/linux/man-pages/man7/pty.7.html
-
-[] Fake PTY:
-    https://github.com/dtolnay/faketty
-    https://github.com/stemjail/tty-rs
-
-[] Good post regarding PTY:
-    https://fasterthanli.me/articles/a-terminal-case-of-linux
-
-*/
-
+use chrono::{DateTime, Utc};
 use env_logger;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fmt::Debug;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::thread;
-use std::time::Duration;
+// use std::sync::Mutex;
+// use std::time::{Duration, Instant};
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::time::{Duration, Instant};
 
-struct IntruderInfo {
+// Set the limit to 10 connections per minute
+const CONNECTION_LIMIT: u32 = 10;
+const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
+
+const MY_IP: &str = "81.164.189.195";
+
+// Use an Arc<Mutex<T>> to allow multiple tasks to access the connection_counter concurrently.
+// This allows multiple tasks to modify the connection_counter hashmap simultaneously without
+// causing a race condition.
+// type ConnectionCounter = Arc<Mutex<HashMap<String, (u32, Instant)>>>;
+type ConnectionCounter = Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>;
+
+struct Intruder {
     username: String,
     password: String,
-    ip_address: IpAddr,
+    ip_info: IPInfo,
+    ip_v4_address: Option<Ipv4Addr>,
+    ip_v6_address: Option<Ipv6Addr>,
+    ip: String,
     source_port: u16,
-    // ip_v4_address: Ipv4Addr,
-    // ip_v6_address: Ipv6Addr,
-    // time: Time
+    time: DateTime<Utc>,
+}
+
+impl Intruder {
+    fn new() -> Self {
+        Self {
+            username: "".to_string(),
+            password: "".to_string(),
+            ip_info: IPInfo::default(),
+            ip_v4_address: None,
+            ip_v6_address: None,
+            ip: "".to_string(),
+            source_port: 0,
+            time: Utc::now(),
+        }
+    }
+
+    // fn set_ip(&mut self) {
+    //     self.ip = self
+    //         .ip_v4_address
+    //         .map(|ip| ip.to_string())
+    //         .or_else(|| self.ip_v6_address.map(|ip| ip.to_string()))
+    //         .unwrap_or_else(|| "".to_string());
+    // }
+
+    fn set_ip(&mut self) {
+        match (self.ip_v4_address, self.ip_v6_address) {
+            (Some(ip), _) => self.ip = ip.to_string(),
+            (_, Some(ip)) => self.ip = ip.to_string(),
+            (None, None) => self.ip = "".to_string(),
+        }
+    }
+
+    fn time_str(&self) -> String {
+        self.time.format("%Y-%m-%d %H:%M:%S").to_string()
+    }
+
+    fn ipv4_str(&self) -> String {
+        self.ip_v4_address
+            .unwrap_or(Ipv4Addr::UNSPECIFIED)
+            .to_string()
+    }
+
+    fn ipv6_str(&self) -> String {
+        self.ip_v6_address
+            .unwrap_or(Ipv6Addr::UNSPECIFIED)
+            .to_string()
+    }
 }
 
 #[derive(Debug, Deserialize)]
-struct IntruderWhois {
+struct IPInfo {
     ip: String,
     country_name: String,
     #[serde(rename = "country_code2")]
     country_code: String,
     isp: String,
+}
+
+impl IPInfo {
+    fn default() -> Self {
+        Self {
+            ip: "".to_string(),
+            country_name: "".to_string(),
+            country_code: "".to_string(),
+            isp: "".to_string(),
+        }
+    }
+}
+
+fn check_rfc_1918(ip: &String) -> bool {
+    let ip_addr = match ip.parse::<IpAddr>() {
+        Ok(ip_addr) => ip_addr,
+        Err(_) => return false,
+    };
+
+    match ip_addr {
+        IpAddr::V4(ipv4) => ipv4.is_private(),
+        IpAddr::V6(_) => false,
+    }
+}
+
+async fn whois(intruder: &mut Intruder) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Looking up {}", intruder.ip);
+
+    let url = format!("https://api.iplocation.net/?ip={}", intruder.ip);
+
+    let resp: IPInfo = reqwest::get(url).await?.json().await?;
+    intruder.ip_info = resp;
+
+    Ok(())
 }
 
 fn default_banner() -> String {
@@ -75,94 +141,62 @@ fn default_banner() -> String {
     .to_string();
 }
 
-fn get_credentials(stream: &mut TcpStream, intruder_info: &mut IntruderInfo) {
-    get_username(stream, intruder_info);
-    get_password(stream, intruder_info);
-
-    // if let Ok(Some(user)) = user {
-    //     stream.write_all(b"\n").unwrap();
-    //     credentials.username = user.to_string();
-    // } else {
-    //     stream.write_all(b"Error\n").unwrap();
-    // }
-
-    println!(
-        "username: {}\npassword: {}\nip: {}\nport: {}",
-        intruder_info.username,
-        intruder_info.password,
-        intruder_info.ip_address,
-        intruder_info.source_port
-    );
-}
-
-fn get_username(stream: &mut TcpStream, intruder_info: &mut IntruderInfo) {
-    stream.write_all(b"username: ").unwrap();
-    stream.flush().unwrap();
-
-    let mut reader = io::BufReader::new(stream);
-    let received: Vec<u8> = reader.fill_buf().unwrap().to_vec();
-    reader.consume(received.len());
-
-    let mut username = String::from_utf8(received).unwrap();
-    username.pop();
-
-    intruder_info.username = username;
-    // intruder_info.username = String::from_utf8(received).unwrap();
-}
-
-fn get_password(stream: &mut TcpStream, intruder_info: &mut IntruderInfo) {
-    stream.write_all(b"password: ").unwrap();
-    stream.flush().unwrap();
-
-    let mut reader = io::BufReader::new(stream);
-    let received: Vec<u8> = reader.fill_buf().unwrap().to_vec();
-    reader.consume(received.len());
-
-    let mut password = String::from_utf8(received).unwrap();
-    password.pop();
-
-    intruder_info.password = password;
-    // intruder_info.password = String::from_utf8(received).unwrap();
-}
-
-fn handle_connection(mut stream: TcpStream) {
-    let mut intruder_info = IntruderInfo {
-        username: String::new(),
-        password: String::new(),
-        source_port: 0,
-        ip_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        // ip_v4_address: Ipv4Addr::new(0, 0, 0, 0),
-        // ip_v6_address: Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 0),
-    };
-
+fn log_incoming_connection(stream: &TcpStream, intruder: &mut Intruder) {
     let ip_address = stream.peer_addr().unwrap().ip();
-    let port = stream.peer_addr().unwrap().port();
+    let source_port = stream.peer_addr().unwrap().port();
 
-    intruder_info.ip_address = ip_address;
-    intruder_info.source_port = port;
+    info!(
+        "[+] connection from {} on port {}\n",
+        ip_address, source_port
+    );
 
-    info!("[+] connection from {} on port {}\n", ip_address, port);
+    intruder.time = Utc::now();
 
-    stream.set_read_timeout(Some(Duration::new(15, 0))).unwrap();
-    stream.set_write_timeout(Some(Duration::new(3, 0))).unwrap();
+    if let IpAddr::V4(ipv4) = ip_address {
+        intruder.ip_v4_address = Some(ipv4);
+    } else if let IpAddr::V6(ipv6) = ip_address {
+        intruder.ip_v6_address = Some(ipv6);
+    }
 
-    stream.write_all(default_banner().as_bytes()).unwrap();
+    intruder.set_ip();
 
-    get_credentials(&mut stream, &mut intruder_info);
+    intruder.source_port = source_port;
 }
 
-// fn send_initial_telnet_client_command(stream: TcpStream) {
-//     let mut writer = &stream;
+// fn print_banner(stream: &TcpStream, banner: Option<String>) {
+fn print_banner(stream: &TcpStream, banner: Option<String>) -> io::Result<()> {
+    let mut stream = stream;
 
-//     writer.write_all(b"\xff\xfd\x03")?; // Terminal type
-//     writer.write_all(b"\xff\xfb\x18")?; // End of record
-//     writer.write_all(b"\xff\xfb\x1f")?; // Terminal speed
-//     writer.write_all(b"\xff\xfb\x20")?; // Toggle flow control
-//     writer.write_all(b"\xff\xfb\x21")?; // Line mode
-//     writer.write_all(b"\xff\xfb\x22")?; // Carriage return/line feed (CR/LF) transmission
-//     writer.write_all(b"\xff\xfb\x27")?; // Output marking
-//     writer.write_all(b"\xff\xfd\x05")?; // Supress go ahead
-// }
+    match banner {
+        Some(banner) => {
+            // stream.write_all(banner.as_bytes()).unwrap();
+            stream.write_all(banner.as_bytes())?;
+        }
+        None => {
+            // stream.write_all(default_banner().as_bytes()).unwrap();
+            stream.write_all(default_banner().as_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn get_telnet_username(stream: &TcpStream, intruder: &mut Intruder) -> io::Result<String> {
+    let mut reader = BufReader::new(stream);
+    let mut writer = stream;
+
+    let mut username = String::new();
+
+    writer.write_all(b"Username: ").unwrap();
+    writer.flush().unwrap();
+    reader.read_line(&mut username)?;
+
+    username = username.trim().to_string();
+
+    intruder.username = username.clone();
+
+    Ok(username)
+}
 
 fn read_until_cr(stream: &TcpStream) -> String {
     let mut writer = stream;
@@ -188,7 +222,6 @@ fn read_until_cr(stream: &TcpStream) -> String {
 
         for c in s.chars() {
             if c == '\r' || c == '\n' {
-                dbg!("Got EOF");
                 break 'outer;
             }
 
@@ -201,90 +234,122 @@ fn read_until_cr(stream: &TcpStream) -> String {
     String::from_utf8(buffer).unwrap()
 }
 
-fn get_telnet_password(stream: &TcpStream) -> io::Result<String> {
-    // let mut writer = &mut stream;
-    let mut writer = stream;
+fn get_telnet_password(stream: &TcpStream, intruder: &mut Intruder) -> io::Result<String> {
+    let mut stream = stream;
 
-    writer.write_all(b"\xff\xfb\x01")?; // Echo
-    writer.write_all(b"\xff\xfb\x03")?; // Suppress go ahead
-    writer.write_all(b"\xff\xfd\x18")?; // Terminal type
-    writer.write_all(b"\xff\xfd\x1f")?; // Terminal speed
+    stream.write_all(b"\xff\xfb\x01")?; // Echo
+    stream.write_all(b"\xff\xfb\x03")?; // Suppress go ahead
+    stream.write_all(b"\xff\xfd\x18")?; // Terminal type
+    stream.write_all(b"\xff\xfd\x1f")?; // Terminal speed
 
-    // writer.write_all(b"\x0d\x0a")?; // \r\n
-    writer.write_all(b"\x0d")?; // \r
-    writer.write_all(b"Password: ")?;
-    // writer.write_all(b"\x0d\x0a")?; // \r\n
+    stream.write_all(b"\x0d")?; // \r
+    stream.write_all(b"Password: ")?;
 
-    // writer.write_all(b"\xff\xfa\x18")?; // End of record
-    // writer.write_all(b"\x01\xff\xf0")?; // Output line width
-    writer.write_all(b"\xff\xfe\x20")?; // Toggle flow control
+    stream.write_all(b"\xff\xfe\x20")?; // Toggle flow control
 
-    writer.write_all(b"\xff\xfe\x21")?; // Line mode
-    writer.write_all(b"\xff\xfe\x22")?; // Carriage return/line feed (CR/LF) transmission
-    writer.write_all(b"\xff\xfe\x27")?; // Output marking
+    stream.write_all(b"\xff\xfe\x21")?; // Line mode
+    stream.write_all(b"\xff\xfe\x22")?; // Carriage return/line feed (CR/LF) transmission
+    stream.write_all(b"\xff\xfe\x27")?; // Output marking
 
-    writer.write_all(b"\xff\xfc\x05")?; // negotiate the suppress go ahead option
+    stream.write_all(b"\xff\xfc\x05")?; // negotiate the suppress go ahead option
 
-    // let mut password = String::new();
-    let mut password = read_until_cr(writer);
+    let mut password = read_until_cr(stream);
+    stream.write_all(b"\x0d\x0a")?; // \r\n
+
     password = password.trim().to_string();
 
-    // writer.write_all(b"\x0d\x0a")?; // \r\n
-    // writer.write_all(b"Password: ")?;
+    intruder.password = password.clone();
 
     Ok(password)
 }
 
-fn handle_telnet_client(stream: TcpStream) -> io::Result<()> {
-    let ip_address = stream.peer_addr().unwrap().ip();
-    let port = stream.peer_addr().unwrap().port();
-    info!("[+] connection from {} on port {}\n", ip_address, port);
+fn display_intruder_info(intruder: Intruder) {
+    info!("Username: {}", intruder.username);
+    info!("Password: {}", intruder.password);
+    info!("IP address: {}", intruder.ip);
+    info!("Source port: {}", intruder.source_port);
+    info!("Time: {}", intruder.time_str());
 
-    let mut reader = BufReader::new(&stream);
-    let mut writer = &stream;
+    info!("ip: {}", intruder.ip_info.ip);
+    info!("country_name: {}", intruder.ip_info.country_name);
+    info!("country_code: {}", intruder.ip_info.country_code);
+    info!("ISP: {}", intruder.ip_info.isp);
+}
 
-    writer.write_all(default_banner().as_bytes()).unwrap();
+async fn handle_telnet_client(stream: TcpStream) -> io::Result<()> {
+    let mut intruder = Intruder::new();
 
-    // Read the client's username
-    let mut username = String::new();
-    writer.write_all(b"Username: ").unwrap();
-    writer.flush().unwrap();
-    reader.read_line(&mut username)?;
-    username = username.trim().to_string();
+    log_incoming_connection(&stream, &mut intruder);
+    print_banner(&stream, None);
 
-    let password = get_telnet_password(writer).unwrap();
+    let _ = get_telnet_username(&stream, &mut intruder).unwrap();
+    let _ = get_telnet_password(&stream, &mut intruder).unwrap();
 
-    info!("Username: {}", username);
-    info!("Password: {}", password);
+    intruder.ip = MY_IP.to_string();
+
+    if !check_rfc_1918(&intruder.ip) {
+        let _ = whois(&mut intruder).await;
+    }
+
+    display_intruder_info(intruder);
 
     Ok(())
 }
 
-fn listen() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.23:2223")?;
+// Check the number of connections from each IP address every time a new connection is made
+async fn handle_connection(
+    stream: TcpStream,
+    connection_counter: ConnectionCounter,
+) -> io::Result<()> {
+    let ip_address = stream.peer_addr()?.ip();
+    let source_port = stream.peer_addr().unwrap().port();
 
-    // accept connections and process them serially
-    for stream in listener.incoming() {
-        let _ = handle_telnet_client(stream?);
-        // let _ = get_telnet_password(&mut stream?);
+    info!("IP address: {}", ip_address);
+    info!("Source port: {}", source_port);
+
+    let mut connection_counter = connection_counter.lock().await;
+
+    let entry = connection_counter
+        .entry(ip_address)
+        .or_insert((0, Instant::now()));
+
+    // info!("Entry: {}", entry.0);
+
+    if entry.1.elapsed() > CONNECTION_FLUSH_TIME_PERIOD {
+        entry.0 = 0;
+        entry.1 = Instant::now();
+    }
+
+    if entry.0 >= CONNECTION_LIMIT {
+        warn!("Connection limit exceeded");
+        return Ok(());
+    }
+
+    entry.0 += 1;
+
+    // let _ = handle_telnet_client(stream).await;
+
+    Ok(())
+}
+
+async fn listen(port: u16) -> std::io::Result<()> {
+    // Create a hash map to store the number of connections from each IP address
+    let connection_counter = Arc::new(Mutex::new(HashMap::new()));
+
+    let listener = TcpListener::bind(format!("127.0.0.23:{}", port))?;
+
+    while let Ok((stream, _)) = listener.accept() {
+        let connection_counter = connection_counter.clone();
+        tokio::spawn(async move {
+            // let _ = handle_telnet_client(stream).await;
+            let _ = handle_connection(stream, connection_counter).await;
+        });
     }
     Ok(())
 }
 
-fn whois(ip: String) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Looking up {}", ip);
-
-    let url = format!("https://api.iplocation.net/?ip={}", ip);
-
-    let resp: IntruderWhois = reqwest::blocking::get(url).unwrap().json().unwrap();
-
-    println!("{:#?}", resp);
-
-    Ok(())
-}
-
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
-    // let _ = whois("81.164.189.195".to_string());
-    listen().unwrap();
+    listen(2223).await.unwrap();
 }

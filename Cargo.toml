@@ -9,3 +9,6 @@ log = "*"
 env_logger = "*"
 serde = { version = "*", features = ["derive"] }
 reqwest = { version = "*", features = ["json", "blocking"] }
+tokio = { version = "*", features = ["full"] }
+chrono = "*"
+once_cell = "*"
