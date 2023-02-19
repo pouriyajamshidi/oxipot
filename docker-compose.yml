@@ -1,0 +1,16 @@
+version: '3'
+services:
+  oxipot:
+    image: oxipot:latest
+    ports:
+      - "23:2223"
+    volumes:
+      - oxipot_db:/oxipot
+    restart: unless-stopped
+volumes:
+  oxipot_db:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/log/oxipot
