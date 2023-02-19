@@ -3,12 +3,19 @@ name = "oxipot"
 version = "0.1.0"
 edition = "2021"
 authors = ["Pouriya Jamshidi"]
+build = "build.rs"
+
+# [build]
+# target = "x86_64-unknown-linux-gnu"
+
+# [profile.release]
+# rustflags = ["-C", "optimization=3", "-C", "lto"]
 
 [dependencies]
+sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"] }
 log = "*"
 env_logger = "*"
 serde = { version = "*", features = ["derive"] }
 reqwest = { version = "*", features = ["json", "blocking"] }
 tokio = { version = "*", features = ["full"] }
 chrono = "*"
-once_cell = "*"
