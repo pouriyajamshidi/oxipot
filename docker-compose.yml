@@ -5,12 +5,9 @@ services:
     ports:
       - "23:2223"
     volumes:
-      - oxipot_db:/oxipot
+      - /var/log/oxipot/oxipot.db:/oxipot/oxipot.db:rw
     restart: unless-stopped
-volumes:
-  oxipot_db:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/log/oxipot
+    resources:
+      limits:
+        cpus: '1'
+        memory: '128m'
