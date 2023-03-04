@@ -1,13 +1,13 @@
-version: '3'
 services:
   oxipot:
     image: oxipot:latest
     ports:
-      - "23:2223"
+      - 23:2223
     volumes:
       - /var/log/oxipot/oxipot.db:/oxipot/oxipot.db:rw
     restart: unless-stopped
-    resources:
-      limits:
-        cpus: '1'
-        memory: '128m'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.10'
+          memory: 128M
