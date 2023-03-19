@@ -4,18 +4,18 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Pouriya Jamshidi"]
 build = "build.rs"
-
-# [build]
-# target = "x86_64-unknown-linux-gnu"
-
-# [profile.release]
-# rustflags = ["-C", "optimization=3", "-C", "lto"]
+incremental = true
 
 [dependencies]
 sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"] }
 log = "*"
 env_logger = "*"
 serde = { version = "*", features = ["derive"] }
-reqwest = { version = "*", features = ["json", "blocking"] }
+reqwest = { version = "*", default-features = false, features = [
+    "json",
+    "blocking",
+    "rustls-tls",
+] }
 tokio = { version = "*", features = ["full"] }
 chrono = "*"
+signal-hook = "0.3.15"
