@@ -4,10 +4,10 @@ services:
     ports:
       - 23:2223
     volumes:
-      - /var/log/oxipot/oxipot.db:/oxipot/oxipot.db:rw
+      - /var/log/oxipot/oxipot.db:/oxipot/oxipot.db
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          cpus: '0.10'
+          # cpus: '0.70'
           memory: 128M
