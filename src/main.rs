@@ -4,62 +4,27 @@ use log::{error, info, warn};
 use reqwest::blocking::Client;
 use rusqlite::Connection;
 use serde::Deserialize;
-use signal_hook::consts::SIGINT;
-use signal_hook::consts::SIGTERM;
+use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::process::exit;
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, sleep};
 use std::time::Duration;
+// use std::collections::HashMap;
 
-// Set the limit to 10 connections per minute
-const CONNECTION_LIMIT: u32 = 10;
-const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
+// const CONNECTION_LIMIT: u32 = 10;
+// const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
 const CONNECTION_INACTIVITY_TIMEOUT: u64 = 20;
 
 const DB_URL: &str = "oxipot.db";
 
-// Use an Arc<Mutex<T>> to allow multiple tasks to access the connection_counter concurrently.
-// This allows multiple tasks to modify the connection_counter hashmap simultaneously without
-// causing a race condition.
+const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
+
 // type ConnectionCounter = Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>;
-
-enum TelnetCommand {
-    Echo,
-    SuppressGoAhead,
-    TerminalType,
-    TerminalSpeed,
-    CarriageReturn,
-    ToggleFlowControl,
-    LineMode,
-    CarriageReturnLineFeed,
-    OutputMarking,
-    NegotiateSuppressGoAhead,
-    CarriageReturnLineFeedCRLF,
-}
-
-impl TelnetCommand {
-    fn as_bytes(&self) -> &[u8] {
-        match self {
-            TelnetCommand::Echo => &[0xff, 0xfb, 0x01],
-            TelnetCommand::SuppressGoAhead => &[0xff, 0xfb, 0x03],
-            TelnetCommand::TerminalType => &[0xff, 0xfd, 0x18],
-            TelnetCommand::TerminalSpeed => &[0xff, 0xfd, 0x1f],
-            TelnetCommand::CarriageReturn => &[0x0d],
-            TelnetCommand::ToggleFlowControl => &[0xff, 0xfe, 0x20],
-            TelnetCommand::LineMode => &[0xff, 0xfe, 0x21],
-            TelnetCommand::CarriageReturnLineFeed => &[0xff, 0xfe, 0x22],
-            TelnetCommand::OutputMarking => &[0xff, 0xfe, 0x27],
-            TelnetCommand::NegotiateSuppressGoAhead => &[0xff, 0xfc, 0x05],
-            TelnetCommand::CarriageReturnLineFeedCRLF => &[0x0d, 0x0a],
-        }
-    }
-}
 
 struct Intruder {
     username: String,
@@ -77,7 +42,7 @@ impl Intruder {
         Self {
             username: "".to_string(),
             password: "".to_string(),
-            ip_info: IPInfo::default(),
+            ip_info: IPInfo::new(),
             ip_v4_address: None,
             ip_v6_address: None,
             ip: "".to_string(),
@@ -86,36 +51,18 @@ impl Intruder {
         }
     }
 
-    // fn set_ip(&mut self) {
-    //     self.ip = self
-    //         .ip_v4_address
-    //         .map(|ip| ip.to_string())
-    //         .or_else(|| self.ip_v6_address.map(|ip| ip.to_string()))
-    //         .unwrap_or_else(|| "".to_string());
-    // }
-
     fn set_ip(&mut self) {
-        match (self.ip_v4_address, self.ip_v6_address) {
-            (Some(ip), _) => self.ip = ip.to_string(),
-            (_, Some(ip)) => self.ip = ip.to_string(),
-            (None, None) => self.ip = "".to_string(),
+        if let Some(ip) = self.ip_v4_address {
+            self.ip = ip.to_string();
+        } else if let Some(ip) = self.ip_v6_address {
+            self.ip = ip.to_string();
+        } else {
+            self.ip = "".to_string();
         }
     }
 
     fn time_str(&self) -> String {
         self.time.format("%Y-%m-%d %H:%M:%S").to_string()
-    }
-
-    fn ipv4_str(&self) -> String {
-        self.ip_v4_address
-            .unwrap_or(Ipv4Addr::UNSPECIFIED)
-            .to_string()
-    }
-
-    fn ipv6_str(&self) -> String {
-        self.ip_v6_address
-            .unwrap_or(Ipv6Addr::UNSPECIFIED)
-            .to_string()
     }
 
     fn time_to_text(&self) -> String {
@@ -133,7 +80,7 @@ struct IPInfo {
 }
 
 impl IPInfo {
-    fn default() -> Self {
+    fn new() -> Self {
         Self {
             ip: "".to_string(),
             country_name: "".to_string(),
@@ -175,6 +122,7 @@ impl IPInfoCache {
             if existing_info.ip == intruder.ip {
                 got_a_match = true;
                 info!("got a match for {} in cache", intruder.ip);
+
                 // If the existing IPInfo's country name is empty, mark it for removal.
                 if existing_info.country_name.is_empty() {
                     info!(
@@ -186,7 +134,6 @@ impl IPInfoCache {
                     return;
                 }
             }
-            // info!("got no match for {} in cache", intruder.ip);
         }
         // If we marked an existing IPInfo for removal, remove it now.
         if let Some(idx) = idx_to_remove {
@@ -218,12 +165,9 @@ impl<'a> TelnetStream<'a> {
                 std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::BrokenPipe => {
-                    // warn!("connection closed by peer");
                     self.close();
                 }
-                _ => {
-                    self.close();
-                }
+                _ => self.close(),
             },
         }
     }
@@ -235,7 +179,7 @@ impl<'a> TelnetStream<'a> {
                 std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::BrokenPipe => {
-                    warn!("connection closed by peer");
+                    warn!("Connection closed by peer");
                     self.close();
                     Err(e)
                 }
@@ -254,7 +198,7 @@ impl<'a> TelnetStream<'a> {
                 std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::BrokenPipe => {
-                    warn!("connection closed by peer");
+                    warn!("Connection closed by peer");
                     self.close();
                     Err(e)
                 }
@@ -269,30 +213,46 @@ impl<'a> TelnetStream<'a> {
     fn close(&mut self) {
         match self.stream.shutdown(Shutdown::Both) {
             Ok(_) => {
-                warn!("connection closed successfully");
+                info!("Connection closed successfully");
             }
             Err(e) => {
-                error!("Error Occured {:?} while shutting down the stream", e);
+                error!("Encountered {:?} while shutting down the TCP stream", e);
             }
         }
     }
 }
 
-// fn create_database() -> Result<(), sqlx::Error> {
-//     match !Sqlite::database_exists(DB_URL) {
-//         true => {
-//             info!("Creating database {}", DB_URL);
-//             match Sqlite::create_database(DB_URL) {
-//                 Ok(_) => info!("DB created successfully"),
-//                 Err(error) => panic!("error: {}", error),
-//             }
-//         }
-//         false => {
-//             info!("Database already exists");
-//         }
-//     }
-//     Ok(())
-// }
+enum TelnetCommand {
+    Echo,
+    SuppressGoAhead,
+    TerminalType,
+    TerminalSpeed,
+    CarriageReturn,
+    ToggleFlowControl,
+    LineMode,
+    CarriageReturnLineFeed,
+    OutputMarking,
+    NegotiateSuppressGoAhead,
+    CarriageReturnLineFeedCRLF,
+}
+
+impl TelnetCommand {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            TelnetCommand::Echo => &[0xff, 0xfb, 0x01],
+            TelnetCommand::SuppressGoAhead => &[0xff, 0xfb, 0x03],
+            TelnetCommand::TerminalType => &[0xff, 0xfd, 0x18],
+            TelnetCommand::TerminalSpeed => &[0xff, 0xfd, 0x1f],
+            TelnetCommand::CarriageReturn => &[0x0d],
+            TelnetCommand::ToggleFlowControl => &[0xff, 0xfe, 0x20],
+            TelnetCommand::LineMode => &[0xff, 0xfe, 0x21],
+            TelnetCommand::CarriageReturnLineFeed => &[0xff, 0xfe, 0x22],
+            TelnetCommand::OutputMarking => &[0xff, 0xfe, 0x27],
+            TelnetCommand::NegotiateSuppressGoAhead => &[0xff, 0xfc, 0x05],
+            TelnetCommand::CarriageReturnLineFeedCRLF => &[0x0d, 0x0a],
+        }
+    }
+}
 
 fn create_intruders_table(db_connection: &Connection) -> rusqlite::Result<()> {
     match db_connection.execute(
@@ -362,7 +322,7 @@ fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn check_rfc_1918(ip: &String) -> bool {
+fn is_private_ip(ip: &String) -> bool {
     let ip_addr = match ip.parse::<IpAddr>() {
         Ok(ip_addr) => ip_addr,
         Err(_) => return false,
@@ -376,7 +336,7 @@ fn check_rfc_1918(ip: &String) -> bool {
 
 fn whois(intruder: &mut Intruder) -> Result<(), Box<dyn std::error::Error>> {
     info!("Looking up {:?}", intruder.ip);
-    let query_url = format!("https://api.iplocation.net/?ip={}", intruder.ip);
+    let query_url = format!("{}{}", IP_INFO_PROVIDER, intruder.ip);
 
     // let client = reqwest::Client::builder()
     //     .timeout(Duration::from_secs(3))
@@ -384,7 +344,6 @@ fn whois(intruder: &mut Intruder) -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::new();
 
-    // let resp: IPInfo = reqwest::get(query_url).await?.json().await?;
     let resp: IPInfo = client.get(query_url).send()?.json()?;
     intruder.ip_info = resp;
 
@@ -426,35 +385,9 @@ fn get_telnet_username(stream: &TcpStream, intruder: &mut Intruder) {
 
     telnet_stream.write_all(b"login: ");
 
-    // let mut username = read_until_cr(&telnet_stream.stream);
-    // telnet_stream.write_all(TelnetCommand::CarriageReturnLineFeedCRLF.as_bytes());
-
     let username = read_until_cr(&telnet_stream.stream);
     intruder.username = username.trim().to_string().clone();
-
-    // username = username.trim().to_string();
-    // intruder.username = username.clone();
 }
-
-// fn get_telnet_username(stream: &TcpStream, intruder: &mut Intruder) {
-//     let mut telnet_stream = TelnetStream::new(stream);
-
-//     match telnet_stream.stream.peer_addr() {
-//         Ok(_) => {
-//             telnet_stream.write_all(b"Username: ");
-
-//             let mut username = read_until_cr(&telnet_stream.stream);
-//             telnet_stream.write_all(b"\x0d\x0a");
-
-//             username = username.trim().to_string();
-
-//             intruder.username = username.clone();
-//         }
-//         Err(_) => {
-//             return;
-//         }
-//     }
-// }
 
 fn read_until_cr(stream: &TcpStream) -> String {
     let mut telnet_stream = TelnetStream::new(stream);
@@ -473,7 +406,7 @@ fn read_until_cr(stream: &TcpStream) -> String {
         let s = match std::str::from_utf8(&buf[..n]) {
             Ok(s) => s,
             Err(e) => {
-                error!("Error parsing UTF-8 data: {}", e);
+                warn!("Problem reading telnet stream data: {}", e);
                 continue;
             }
         };
@@ -515,36 +448,6 @@ fn get_telnet_password(stream: &TcpStream, intruder: &mut Intruder) {
     intruder.password = password.clone();
 }
 
-// fn get_telnet_password(stream: &TcpStream, intruder: &mut Intruder) {
-//     let mut telnet_stream = TelnetStream::new(stream);
-
-//     match telnet_stream.stream.peer_addr() {
-//         Ok(_) => {
-//             telnet_stream.write_all(b"\xff\xfb\x01"); // Echo
-//             telnet_stream.write_all(b"\xff\xfb\x03"); // Suppress go ahead
-//             telnet_stream.write_all(b"\xff\xfd\x18"); // Terminal type
-//             telnet_stream.write_all(b"\xff\xfd\x1f"); // Terminal speed
-//             telnet_stream.write_all(b"\x0d"); // \r
-//             telnet_stream.write_all(b"Password: ");
-//             telnet_stream.write_all(b"\xff\xfe\x20"); // Toggle flow control
-//             telnet_stream.write_all(b"\xff\xfe\x21"); // Line mode
-//             telnet_stream.write_all(b"\xff\xfe\x22"); // Carriage return/line feed (CR/LF) transmission
-//             telnet_stream.write_all(b"\xff\xfe\x27"); // Output marking
-//             telnet_stream.write_all(b"\xff\xfc\x05"); // negotiate the suppress go ahead option
-
-//             let mut password = read_until_cr(&telnet_stream.stream);
-//             telnet_stream.write_all(b"\x0d\x0a"); // \r\n
-
-//             password = password.trim().to_string();
-
-//             intruder.password = password.clone();
-//         }
-//         Err(_) => {
-//             return;
-//         }
-//     }
-// }
-
 fn display_intruder_info(intruder: &Intruder) {
     info!("Username: {}", intruder.username);
     info!("Password: {}", intruder.password);
@@ -564,7 +467,7 @@ fn handle_telnet_client(stream: TcpStream, mut intruder: &mut Intruder) -> io::R
     let _ = get_telnet_username(&stream, &mut intruder);
     let _ = get_telnet_password(&stream, &mut intruder);
 
-    // sleep(Duration::new(2, 0));
+    sleep(Duration::new(2, 0));
 
     Ok(())
 }
@@ -582,11 +485,7 @@ fn log_incoming_connection(ip_address: IpAddr, source_port: u16, intruder: &mut 
     intruder.source_port = source_port;
 }
 
-fn handle_connection(
-    stream: TcpStream,
-    // connection_counter: ConnectionCounter,
-    ip_info_cache: &Arc<Mutex<IPInfoCache>>,
-) -> io::Result<()> {
+fn handle_connection(stream: TcpStream, ip_info_cache: &Arc<Mutex<IPInfoCache>>) -> io::Result<()> {
     let ip_address = stream.peer_addr().unwrap().ip();
     let source_port = stream.peer_addr().unwrap().port();
 
@@ -607,25 +506,6 @@ fn handle_connection(
 
     log_incoming_connection(ip_address, source_port, &mut intruder);
 
-    // let mut connection_counter = connection_counter.lock().await;
-
-    // let entry = connection_counter
-    //     .entry(ip_address)
-    //     .or_insert((0, Instant::now()));
-
-    // if entry.1.elapsed() > CONNECTION_FLUSH_TIME_PERIOD {
-    //     entry.0 = 0;
-    //     entry.1 = Instant::now();
-    // }
-
-    // if entry.0 >= CONNECTION_LIMIT {
-    //     warn!("Connection limit exceeded for {}", ip_address);
-    //     let _ = stream.shutdown(Shutdown::Both);
-    //     return Ok(());
-    // }
-
-    // entry.0 += 1;
-
     let _ = handle_telnet_client(stream, &mut intruder);
 
     let cache_guard = ip_info_cache.lock().map_err(|_| io::ErrorKind::Other)?;
@@ -636,7 +516,7 @@ fn handle_connection(
         intruder.ip_info = ip_info;
     } else {
         info!("The intruder {} does not exist in cache", intruder.ip);
-        if !(check_rfc_1918(&intruder.ip)) {
+        if !(is_private_ip(&intruder.ip)) {
             let _ = whois(&mut intruder);
             ip_info_cache.add(&intruder)
         }
@@ -670,11 +550,11 @@ fn handle_signal() {
     for signal in signals.forever() {
         match signal {
             SIGINT => {
-                println!("Received SIGINT, cleaning up and shutting down.");
+                println!("\nReceived SIGINT, cleaning up and shutting down.");
                 exit(0);
             }
             SIGTERM => {
-                println!("Received SIGTERM, cleaning up and shutting down.");
+                println!("\nReceived SIGTERM, cleaning up and shutting down.");
                 exit(0);
             }
             // _ => unreachable!(),
@@ -684,7 +564,7 @@ fn handle_signal() {
 }
 
 fn main() {
-    // tokio::spawn(handle_signal());
     env_logger::init();
+    thread::spawn(move || handle_signal());
     listen(2223).unwrap();
 }
