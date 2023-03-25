@@ -1,5 +1,8 @@
 services:
   oxipot:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: oxipot:latest
     ports:
       - 23:2223
@@ -9,5 +12,5 @@ services:
     deploy:
       resources:
         limits:
-          # cpus: '0.70'
+          cpus: '0.10'
           memory: 128M
