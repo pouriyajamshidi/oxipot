@@ -36,6 +36,6 @@ COPY --from=builder /oxipot/target/release/oxipot  /oxipot/
 
 EXPOSE 2223
 
-ENV RUST_LOG=debug
+ENV RUST_LOG=info
 
 CMD [ "/oxipot/oxipot"]

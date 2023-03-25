@@ -7,7 +7,7 @@ build = "build.rs"
 incremental = true
 
 [dependencies]
-sqlx = { version = "*", features = ["runtime-tokio-rustls", "sqlite"] }
+rusqlite = { version = "*", features = ["bundled"] }
 log = "*"
 env_logger = "*"
 serde = { version = "*", features = ["derive"] }
@@ -16,6 +16,5 @@ reqwest = { version = "*", default-features = false, features = [
     "blocking",
     "rustls-tls",
 ] }
-tokio = { version = "*", features = ["full"] }
 chrono = "*"
 signal-hook = "0.3.15"
