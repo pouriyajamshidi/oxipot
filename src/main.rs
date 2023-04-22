@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use env_logger;
 use log::{error, info, warn};
 use reqwest::blocking::Client;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
@@ -101,6 +101,28 @@ impl IPInfoCache {
     }
 
     fn retrieve(&self, intruder: &Intruder) -> Option<IPInfo> {
+        let ip_info = self.retrieve_from_memory(intruder);
+
+        if let Some(_) = ip_info {
+            info!("Found intruder info in memory");
+            return ip_info.clone();
+        }
+
+        // Intruder was not in memory, check the DB
+
+        let ip_info = self.retrieve_from_database(intruder);
+
+        if let Some(_) = ip_info {
+            info!("Found intruder info in Database");
+            return ip_info.clone();
+        }
+
+        return None;
+    }
+
+    fn retrieve_from_memory(&self, intruder: &Intruder) -> Option<IPInfo> {
+        info!("Checking memory for intruder info");
+
         for existing_info in &self.cache {
             if existing_info.ip == intruder.ip {
                 // If the existing IPInfo's country name is not empty, return it.
@@ -110,8 +132,30 @@ impl IPInfoCache {
                 break;
             }
         }
+        return None;
+    }
 
-        None
+    fn retrieve_from_database(&self, intruder: &Intruder) -> Option<IPInfo> {
+        info!("Checking database for intruder info");
+
+        let conn = Connection::open(DB_URL).unwrap();
+        let result = conn.query_row(
+            "SELECT country_name, country_code, isp from intruders WHERE ip=? ORDER BY id DESC LIMIT 1",
+            &[&intruder.ip],
+            |row| {
+                let country_name: String = row.get(0)?;
+                let country_code: String = row.get(1)?;
+                let isp: String = row.get(2)?;
+                Ok(IPInfo {
+                    ip: intruder.ip.clone(),
+                    country_name,
+                    country_code,
+                    isp,
+                })
+            },
+        ).optional();
+
+        result.unwrap_or(None)
     }
 
     fn add(&mut self, intruder: &Intruder) {
@@ -397,7 +441,7 @@ fn read_until_cr(stream: &TcpStream) -> String {
         telnet_stream.flush().unwrap();
 
         let mut buf = [0; 1024];
-        let n = telnet_stream.read(&mut buf).unwrap();
+        let n = telnet_stream.read(&mut buf).unwrap(); // TODO: this errors out: panicked at 'called `Result::unwrap()` on an `Err` value: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }'
 
         if n == 0 {
             return String::from_utf8(buffer).unwrap();
