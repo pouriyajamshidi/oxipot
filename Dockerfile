@@ -1,4 +1,4 @@
-FROM rust:1.68.0 as builder
+FROM rust:1.69 as builder
 
 RUN USER=root cargo new --bin oxipot
 
