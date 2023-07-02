@@ -18,3 +18,8 @@ reqwest = { version = "*", default-features = false, features = [
 ] }
 chrono = "*"
 signal-hook = "0.3.15"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
