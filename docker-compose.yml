@@ -7,7 +7,7 @@ services:
     ports:
       - 23:2223
     volumes:
-      - /var/log/oxipot/oxipot.db:/oxipot/oxipot.db
+      - /var/log/oxipot/:/oxipot/db/
     restart: unless-stopped
     deploy:
       resources:
