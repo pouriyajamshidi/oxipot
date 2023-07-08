@@ -10,7 +10,7 @@ A network telnet `HoneyPot` written in Rust.
 - Capture IP and location information of bots, attackers and intruders trying to gain access to your network
 - In-memory (`volatile`) and database (`non-volatile`) IP and location information caching
 - Handles a lot of concurrent network connections
-- Connection rate-limiter (coming soon)
+- Rate-limits persistent intruders
 - Build a big username and password database for IT, OT and IoT (thanks to malicious actors)
 - Extremely resource friendly and efficient to run
 - Containerized for portability and better security
