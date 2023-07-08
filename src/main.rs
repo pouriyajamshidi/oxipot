@@ -25,8 +25,6 @@ const DEFAULT_PORT: u16 = 2223;
 
 const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
 
-// type ConnectionCounter = Arc<Mutex<HashMap<IpAddr, (u32, Instant)>>>;
-
 struct Intruder {
     username: String,
     password: String,
@@ -540,6 +538,7 @@ fn handle_connection(stream: TcpStream, ip_info_cache: &Arc<Mutex<IPInfoCache>>)
         ip_address, source_port
     );
 
+    // TODO: read_timeout instead of set_timeout
     stream
         .set_read_timeout(Some(Duration::from_secs(CONNECTION_INACTIVITY_TIMEOUT)))
         .unwrap();
@@ -583,7 +582,7 @@ fn listen(port: u16) -> std::io::Result<()> {
     let rate_limiter = Arc::new(Mutex::new(HashMap::<IpAddr, u32>::new()));
     let rate_limiter_cloned = Arc::clone(&rate_limiter);
 
-    // Set up a cleaner task
+    // rate_limiter cleaner task
     thread::spawn(move || loop {
         thread::sleep(CONNECTION_FLUSH_TIME_PERIOD);
 
@@ -597,6 +596,7 @@ fn listen(port: u16) -> std::io::Result<()> {
         if let Some(count) = rate_limiter.get_mut(&addr.ip()) {
             if *count >= CONNECTION_LIMIT {
                 warn!("Rate limiting {}", addr.ip());
+                stream.shutdown(Shutdown::Both)?;
                 continue;
             }
             *count += 1;
