@@ -27,6 +27,7 @@ jobs:
           echo "##[set-output name=version;]VERSION=${GITHUB_REF#$"refs/tags/v"}"
           echo "##[set-output name=version_tag;]$GITHUB_REPOSITORY:${GITHUB_REF#$"refs/tags/v"}"
           echo "##[set-output name=latest_tag;]$GITHUB_REPOSITORY:latest"
+
       - name: Print Version
         run: |
           echo ${{steps.version_step.outputs.version}}
@@ -46,19 +47,20 @@ jobs:
         id: extract_tag
         run: |
           TAG_NAME=$(git tag --contains ${{ github.sha }})
+          REPO_NAME=$(echo $REPO_NAME | tr '[:upper:]' '[:lower:]')
           if [ -z "$TAG_NAME" ]; then
-            echo "::set-output name=TAG_NAME::latest"
+            echo "TAG_NAME=latest" >> $GITHUB_ENV
           else
-            echo "::set-output name=TAG_NAME::$TAG_NAME"
+            echo "TAG_NAME=$REPO_NAME:$TAG_NAME" >> $GITHUB_ENV
           fi
 
-      - name: Log in to Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v2.1.0
         with:
           username: ${{ secrets.DOCKER_HUB_USER }}
           password: ${{ secrets.DOCKER_HUB_PASS }}
 
-      - name: Log into GitHub registry ${{ env.REGISTRY }}
+      - name: Login to GitHub container registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v2.1.0
         with:
@@ -66,11 +68,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v4.1.1
+        with:
+          images: |
+            pouriyajamshidi/oxipot
+            ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
       - name: Build and push Docker image
         id: build-and-push
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.extract_tag.outputs.TAG_NAME }}
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
           labels: ${{ steps.meta.outputs.labels }}
