@@ -87,6 +87,6 @@ jobs:
           push: true
           # tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/oxipot:latest
-            ghcr.io/${{ github.repository_owner }}/oxipot:latest
+            ${{ secrets.DOCKER_HUB_USERNAME }}:${{ env.TAG_NAME }}
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
           labels: ${{ steps.meta.outputs.labels }}
