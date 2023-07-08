@@ -17,7 +17,6 @@ reqwest = { version = "*", default-features = false, features = [
     "rustls-tls",
 ] }
 chrono = "*"
-time = "0.3.22"
 signal-hook = "0.3.15"
 
 [profile.release]
