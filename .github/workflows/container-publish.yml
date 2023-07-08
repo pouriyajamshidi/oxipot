@@ -1,0 +1,67 @@
+name: Docker container build
+author: Pouriya Jamshidi
+
+on:
+  workflow_run:
+    workflows: ["rust"]
+    types:
+      - completed
+    branches: ["master"]
+    tags: ["v*.*.*"]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Extract Version
+        id: version_step
+        run: |
+          echo "##[set-output name=version;]VERSION=${GITHUB_REF#$"refs/tags/v"}"
+          echo "##[set-output name=version_tag;]$GITHUB_REPOSITORY:${GITHUB_REF#$"refs/tags/v"}"
+          echo "##[set-output name=latest_tag;]$GITHUB_REPOSITORY:latest"
+      - name: Print Version
+        run: |
+          echo ${{steps.version_step.outputs.version}}
+          echo ${{steps.version_step.outputs.version_tag}}
+          echo ${{steps.version_step.outputs.latest_tag}}
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check code compile
+        run: cargo check
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2.1.0
+        with:
+          username: ${{ secrets.DOCKER_HUB_USER }}
+          password: ${{ secrets.DOCKER_HUB_PASS }}
+
+      - name: Log into GitHub registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v2.1.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
