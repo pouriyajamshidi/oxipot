@@ -2,6 +2,8 @@ services:
   oxipot:
     build:
       context: .
+      args:
+        TZ: ${TZ}
       dockerfile: Dockerfile
     image: oxipot:latest
     ports:
