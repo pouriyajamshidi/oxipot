@@ -20,7 +20,8 @@ use std::time::Duration;
 // const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
 const CONNECTION_INACTIVITY_TIMEOUT: u64 = 20;
 
-const DB_URL: &str = "oxipot.db";
+const DB_URL: &str = "db/oxipot.db";
+const DEFAULT_PORT: u16 = 2223;
 
 const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
 
@@ -298,8 +299,12 @@ impl TelnetCommand {
     }
 }
 
-fn create_intruders_table(db_connection: &Connection) -> rusqlite::Result<()> {
-    match db_connection.execute(
+fn create_intruders_table() -> rusqlite::Result<()> {
+    info!("Creating Database: {} ", DB_URL);
+    let mut conn = Connection::open(DB_URL).unwrap();
+    let tx = conn.transaction().unwrap();
+
+    match tx.execute(
         "CREATE TABLE IF NOT EXISTS intruders (
             id INTEGER PRIMARY KEY NOT NULL, 
             username VARCHAR(250),
@@ -323,15 +328,16 @@ fn create_intruders_table(db_connection: &Connection) -> rusqlite::Result<()> {
         }
     };
 
+    tx.commit().unwrap();
+    conn.close().unwrap();
+
     Ok(())
 }
 
 fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
-    info!("operating on Database: {} ", DB_URL);
+    info!("Inserting intruder's info into Database: {} ", DB_URL);
     let mut conn = Connection::open(DB_URL).unwrap();
     let tx = conn.transaction().unwrap();
-
-    create_intruders_table(&tx)?;
 
     tx.execute(
         "INSERT INTO intruders (
@@ -577,14 +583,16 @@ fn listen(port: u16) -> std::io::Result<()> {
     // let connection_counter = Arc::new(Mutex::new(HashMap::new()));
     let ip_info_cache = Arc::new(Mutex::new(IPInfoCache::new()));
 
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))?;
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
 
     while let Ok((stream, _)) = listener.accept() {
         let ip_info_cache = ip_info_cache.clone();
+
         thread::spawn(move || {
             let _ = handle_connection(stream, &ip_info_cache);
         });
     }
+
     Ok(())
 }
 
@@ -594,14 +602,13 @@ fn handle_signal() {
     for signal in signals.forever() {
         match signal {
             SIGINT => {
-                println!("\nReceived SIGINT, cleaning up and shutting down.");
+                info!("\nReceived SIGINT, cleaning up and shutting down.");
                 exit(0);
             }
             SIGTERM => {
-                println!("\nReceived SIGTERM, cleaning up and shutting down.");
+                info!("\nReceived SIGTERM, cleaning up and shutting down.");
                 exit(0);
             }
-            // _ => unreachable!(),
             _ => return,
         }
     }
@@ -609,6 +616,14 @@ fn handle_signal() {
 
 fn main() {
     env_logger::init();
+
+    let db_result = create_intruders_table();
+    match db_result {
+        Ok(()) => (),
+        Err(_) => exit(1),
+    }
+
     thread::spawn(move || handle_signal());
-    listen(2223).unwrap();
+
+    listen(DEFAULT_PORT).unwrap();
 }
