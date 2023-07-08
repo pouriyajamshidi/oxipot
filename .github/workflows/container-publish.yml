@@ -28,6 +28,17 @@ jobs:
           echo "VERSION_TAG=$GITHUB_REPOSITORY:${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
           echo "LATEST_TAG=$GITHUB_REPOSITORY:latest" >> $GITHUB_ENV
 
+      - name: Extract tag or use latest
+        id: extract_tag
+        run: |
+          TAG_NAME=$(git tag --contains ${{ github.sha }})
+          REPO_NAME=$(echo $REPO_NAME | tr '[:upper:]' '[:lower:]')
+          if [ -z "$TAG_NAME" ]; then
+            echo "TAG_NAME=latest" >> $GITHUB_ENV
+          else
+            echo "TAG_NAME=$REPO_NAME:$TAG_NAME" >> $GITHUB_ENV
+          fi
+
       - name: Print Version
         run: |
           echo ${{ env.VERSION }}
@@ -43,24 +54,13 @@ jobs:
       - name: Check code compile
         run: cargo check
 
-      - name: Extract tag or use latest
-        id: extract_tag
-        run: |
-          TAG_NAME=$(git tag --contains ${{ github.sha }})
-          REPO_NAME=$(echo $REPO_NAME | tr '[:upper:]' '[:lower:]')
-          if [ -z "$TAG_NAME" ]; then
-            echo "TAG_NAME=latest" >> $GITHUB_ENV
-          else
-            echo "TAG_NAME=$REPO_NAME:$TAG_NAME" >> $GITHUB_ENV
-          fi
-
-      - name: Login to Docker Hub
+      - name: Login to DockerHub
         uses: docker/login-action@v2.1.0
         with:
           username: ${{ secrets.DOCKER_HUB_USER }}
           password: ${{ secrets.DOCKER_HUB_PASS }}
 
-      - name: Login to GitHub container registry ${{ env.REGISTRY }}
+      - name: Login to GitHub Container Registry ${{ env.REGISTRY }}
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v2.1.0
         with:
@@ -83,7 +83,10 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v4
         with:
-          context: .
+          context: ./
           push: true
-          tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
+          # tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
+          tags: |
+            ${{ secrets.DOCKER_HUB_USERNAME }}/oxipot:latest
+            ghcr.io/${{ github.repository_owner }}/oxipot:latest
           labels: ${{ steps.meta.outputs.labels }}
