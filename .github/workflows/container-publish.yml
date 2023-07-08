@@ -42,6 +42,16 @@ jobs:
       - name: Check code compile
         run: cargo check
 
+      - name: Extract tag or use latest
+        id: extract_tag
+        run: |
+          TAG_NAME=$(git tag --contains ${{ github.sha }})
+          if [ -z "$TAG_NAME" ]; then
+            echo "::set-output name=TAG_NAME::latest"
+          else
+            echo "::set-output name=TAG_NAME::$TAG_NAME"
+          fi
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v2.1.0
         with:
@@ -62,5 +72,5 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ steps.extract_tag.outputs.TAG_NAME }}
           labels: ${{ steps.meta.outputs.labels }}
