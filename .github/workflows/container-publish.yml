@@ -85,8 +85,7 @@ jobs:
         with:
           context: ./
           push: true
-          # tags: ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}:${{ env.TAG_NAME }}
-            ${{ env.REGISTRY }}/${{ github.repository }}:${{ env.TAG_NAME }}
+            ${{ secrets.DOCKER_HUB_USERNAME }}/oxipot:${{ env.TAG_NAME }}
+            ${{ env.REGISTRY }}/${{ github.repository }}/oxipot:${{ env.TAG_NAME }}
           labels: ${{ steps.meta.outputs.labels }}
