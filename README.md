@@ -14,6 +14,7 @@ A network telnet `HoneyPot` written in Rust.
 - Build a big username and password database for IT, OT and IoT (thanks to malicious actors)
 - Extremely resource friendly and efficient to run
 - Containerized for portability and better security
+- SSH support (TBD)
 
 ## Run
 
@@ -43,7 +44,7 @@ TBD
 
 ## Disclaimer
 
-This is a hobby project and work in progress. Run at your own risk.
+This is a hobby project and work in progress prone to many changes. Run at your own risk.
 
 ## Why Not Tokio?
 
