@@ -6,6 +6,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::Deserialize;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -14,10 +15,9 @@ use std::process::exit;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, sleep};
 use std::time::Duration;
-// use std::collections::HashMap;
 
-// const CONNECTION_LIMIT: u32 = 10;
-// const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
+const CONNECTION_LIMIT: u32 = 10;
+const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
 const CONNECTION_INACTIVITY_TIMEOUT: u64 = 20;
 
 const DB_URL: &str = "db/oxipot.db";
@@ -60,10 +60,6 @@ impl Intruder {
         } else {
             self.ip = "".to_string();
         }
-    }
-
-    fn time_str(&self) -> String {
-        self.time.format("%Y-%m-%d %H:%M:%S").to_string()
     }
 
     fn time_to_text(&self) -> String {
@@ -503,7 +499,7 @@ fn display_intruder_info(intruder: &Intruder) {
     info!("Password: {}", intruder.password);
     info!("IP address: {}", intruder.ip);
     info!("Source port: {}", intruder.source_port);
-    info!("Time: {}", intruder.time_str());
+    info!("Time: {}", intruder.time_to_text());
 
     info!("ip: {}", intruder.ip_info.ip);
     info!("country_name: {}", intruder.ip_info.country_name);
@@ -580,12 +576,34 @@ fn handle_connection(stream: TcpStream, ip_info_cache: &Arc<Mutex<IPInfoCache>>)
 }
 
 fn listen(port: u16) -> std::io::Result<()> {
-    // let connection_counter = Arc::new(Mutex::new(HashMap::new()));
-    let ip_info_cache = Arc::new(Mutex::new(IPInfoCache::new()));
-
     let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
 
-    while let Ok((stream, _)) = listener.accept() {
+    let ip_info_cache = Arc::new(Mutex::new(IPInfoCache::new()));
+
+    let rate_limiter = Arc::new(Mutex::new(HashMap::<IpAddr, u32>::new()));
+    let rate_limiter_cloned = Arc::clone(&rate_limiter);
+
+    // Set up a cleaner task
+    thread::spawn(move || loop {
+        thread::sleep(CONNECTION_FLUSH_TIME_PERIOD);
+
+        let mut rate_limiter = rate_limiter_cloned.lock().unwrap();
+        rate_limiter.clear();
+    });
+
+    while let Ok((stream, addr)) = listener.accept() {
+        let mut rate_limiter = rate_limiter.lock().unwrap();
+
+        if let Some(count) = rate_limiter.get_mut(&addr.ip()) {
+            if *count >= CONNECTION_LIMIT {
+                warn!("Rate limiting {}", addr.ip());
+                continue;
+            }
+            *count += 1;
+        } else {
+            rate_limiter.insert(addr.ip(), 1);
+        }
+
         let ip_info_cache = ip_info_cache.clone();
 
         thread::spawn(move || {
