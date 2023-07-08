@@ -20,13 +20,21 @@ A network telnet `HoneyPot` written in Rust.
 
 ### Using Docker Compose
 
-This is the recommended way since it will always makes sure the container is up.
+This is the recommended way since it will always makes sure the container remains up.
 
-```bash
-docker compose up
-```
+1. Make the database directory:
 
-> Please note this example is using the `compose` plugin and not `docker-compose`.
+   ```bash
+   mkdir /var/log/oxipot
+   ```
+
+2. Start the container:
+
+   ```bash
+   docker compose up
+   ```
+
+> Please note this example is using the new `compose` plugin and not `docker-compose`. Nonetheless, there should be no difference.
 
 ### Using Docker
 
