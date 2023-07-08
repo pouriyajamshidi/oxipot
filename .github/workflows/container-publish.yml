@@ -1,5 +1,4 @@
 name: Docker container build
-author: Pouriya Jamshidi
 
 on:
   workflow_run:
