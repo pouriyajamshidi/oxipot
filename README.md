@@ -56,9 +56,9 @@ Directly using the executable is not recommended. This method should be used onl
 
 4. Run it:
 
-```bash
-./oxipot
-```
+   ```bash
+   ./oxipot
+   ```
 
 ## Disclaimer
 
