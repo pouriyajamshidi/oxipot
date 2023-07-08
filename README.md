@@ -40,7 +40,25 @@ docker run --name oxipot --rm -t -p 23:2223 -v $(pwd):/oxipot/db:rw oxipot:lates
 
 Directly using the executable is not recommended. This method should be used only if you know your craft.
 
-TBD
+1. Download [the executable](https://github.com/pouriyajamshidi/oxipot/releases/latest/download/oxipot.tar.gz).
+
+2. Extract the file:
+
+   ```bash
+   tar -zxvf oxipot.tar.gz
+   ```
+
+3. Make it executable:
+
+   ```bash
+   chmod +x oxipot
+   ```
+
+4. Run it:
+
+```bash
+./oxipot
+```
 
 ## Disclaimer
 
