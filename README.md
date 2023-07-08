@@ -62,10 +62,40 @@ Directly using the executable is not recommended. This method should be used onl
    chmod +x oxipot
    ```
 
-4. Run it:
+4. Make the database directory:
+
+   ```bash
+   mkdir db
+   ```
+
+5. Run it:
 
    ```bash
    ./oxipot
+   ```
+
+## View The Report
+
+After a connection is made to the machine running `oxipot`, a **sqlite3** database is created that you can refer to in order to see who has connected to the machine and what credentials they have used.
+
+Depending on how you run `oxipot`, the location of the database will differ.
+
+- Using [docker compose](#using-docker-compose), the database will be located at `/var/log/oxipot/oxipot.db`.
+- Using [docker run](#using-docker), the database will be located at the directory the image was started at `($pwd)` or a custom directory you have specified.
+- Using [the executable](#using-the-executable), the database will be located at the same directory as `oxipot`.
+
+Utilizing sqlite3, you can view the reports.
+
+1. Open the database:
+
+   ```bash
+   sqlite3 /var/log/oxipot/oxipot.db
+   ```
+
+2. Run your query:
+
+   ```sql
+   SELECT * FROM intruders;
    ```
 
 ## Disclaimer
