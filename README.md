@@ -98,6 +98,10 @@ Utilizing sqlite3, you can view the reports.
    SELECT * FROM intruders;
    ```
 
+The result will be similar to:
+
+![oxipot_report](artwork/oxipot_example_report.png)
+
 ## Disclaimer
 
 This is a hobby project and work in progress prone to many changes. Run at your own risk.
