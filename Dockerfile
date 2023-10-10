@@ -1,5 +1,7 @@
 FROM ubuntu:latest as builder
 
+LABEL maintainer="Pouriya Jamshidi"
+
 RUN DEBIAN_FRONTEND=noninteractive \
     apt-get update \
     && apt-get install -y --no-install-recommends \
