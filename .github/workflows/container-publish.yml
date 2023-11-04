@@ -35,7 +35,7 @@ jobs:
           echo ${{ env.LATEST_TAG }}
 
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Extract tag or use latest
         id: extract_tag
