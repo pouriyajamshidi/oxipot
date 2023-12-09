@@ -105,9 +105,3 @@ The result will be similar to:
 ## Disclaimer
 
 This is a hobby project and work in progress prone to many changes. Run at your own risk.
-
-## Why Not Tokio?
-
-[Tokio](https://tokio.rs) (as of the commit time) struggled on **single core** machines with **128 MB or less** of RAM leading it not to handle multiple incoming connections concurrently. However if you are interested to see how it looked when I first tried to make it work, check the `async` branch of this repo.
-
-⚠️ Use of `tokio` was at a very early stage of my development and the code might be too ugly to look at. Nonetheless, it is kept as a reference and might be deleted soon.
