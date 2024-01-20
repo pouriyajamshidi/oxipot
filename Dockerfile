@@ -47,9 +47,7 @@ RUN DEBIAN_FRONTEND=noninteractive \
 
 ENV TZ="Europe/Brussels"
 
-RUN mkdir /oxipot
-
-RUN mkdir /oxipot/db
+RUN mkdir -p /oxipot/db
 
 WORKDIR /oxipot
 
