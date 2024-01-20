@@ -17,6 +17,8 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::fs;
+use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -302,7 +304,28 @@ impl TelnetCommand {
     }
 }
 
+fn create_database() -> Result<(), Box<dyn std::error::Error>> {
+    info!("Checking the existence of DB file at: {} ", DB_URL);
+
+    let dir = DB_URL.split('/').next().unwrap_or(".");
+    fs::create_dir_all(dir)?;
+
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(DB_URL)
+        .expect("Could not create oxipot.db");
+
+    Ok(())
+}
+
 fn create_intruders_table() -> rusqlite::Result<()> {
+    match create_database() {
+        Ok(_) => {}
+        Err(_) => exit(1),
+    }
+
     info!("Creating Database: {} ", DB_URL);
     let mut conn = Connection::open(DB_URL).unwrap();
     let tx = conn.transaction().unwrap();
