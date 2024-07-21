@@ -2,6 +2,9 @@
 
 ![oxipot_logo](artwork/oxipot_logo.jpeg)
 
+![Downloads](https://img.shields.io/github/downloads/pouriyajamshidi/oxipot/total.svg?label=DOWNLOADS&logo=github)
+![Docker Pulls](https://img.shields.io/docker/pulls/pouriyajamshidi/oxipot)
+
 A network telnet `HoneyPot` written in Rust.
 
 ## Features
