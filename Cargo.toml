@@ -1,10 +1,20 @@
 [package]
 name = "oxipot"
-version = "0.2.0"
+description = "Network honeypot to catch IT, OT, and IoT bots"
+version = "0.3.0"
 edition = "2021"
 authors = ["Pouriya Jamshidi"]
 build = "build.rs"
 incremental = true
+repository = "https://github.com/pouriyajamshidi/oxipot"
+readme = "README.md"
+keywords = ["honeypot", "network", "IT", "OT", "IoT"]
+license = "Boost Software License"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
 
 [dependencies]
 rusqlite = { version = "*", features = ["bundled"] }
@@ -18,8 +28,3 @@ reqwest = { version = "*", default-features = false, features = [
 ] }
 chrono = "*"
 signal-hook = "0.3.17"
-
-[profile.release]
-lto = true
-codegen-units = 1
-strip = true
