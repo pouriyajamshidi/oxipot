@@ -27,4 +27,4 @@ reqwest = { version = "*", default-features = false, features = [
     "rustls-tls",
 ] }
 chrono = "*"
-signal-hook = "0.3.18"
+signal-hook = "0.4.1"
