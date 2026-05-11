@@ -1,4 +1,4 @@
-FROM ubuntu:latest as builder
+FROM ubuntu:latest AS builder
 
 LABEL maintainer="Pouriya Jamshidi"
 
@@ -10,51 +10,36 @@ RUN DEBIAN_FRONTEND=noninteractive \
     tar \
     make \
     build-essential \
+    musl-tools \
+    musl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 
-RUN cargo new --bin oxipot
+RUN rustup target add x86_64-unknown-linux-musl
 
 WORKDIR /oxipot
 
-COPY ./Cargo.lock ./Cargo.lock
-COPY ./Cargo.toml ./Cargo.toml
-COPY ./build.rs ./build.rs
+COPY ./Cargo.lock ./Cargo.toml ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN rm -rf src
 
-RUN cargo build --release
+COPY ./src ./src
+RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-musl
 
-RUN rm src/*.rs
-RUN rm ./target/release/deps/oxipot*
+FROM alpine:latest
 
-COPY ./src/main.rs /oxipot/src/
-COPY . /oxipot/
+COPY --from=builder /oxipot/target/x86_64-unknown-linux-musl/release/oxipot /usr/local/bin/oxipot
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-RUN cargo build --release
-
-FROM ubuntu:latest
-
-ARG TZ
-ENV TZ ${TZ}
-
-RUN DEBIAN_FRONTEND=noninteractive \
-    apt-get update \
-    && apt-get install -y --no-install-recommends \
-    tzdata \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV TZ="Europe/Brussels"
-
-RUN mkdir -p /oxipot/db
-
-WORKDIR /oxipot
-
-COPY --from=builder /oxipot/target/release/oxipot  /oxipot/
+ENV TZ=Europe/Brussels
+ENV RUST_LOG=info
 
 EXPOSE 2223
 
-ENV RUST_LOG=info
+VOLUME ["/oxipot/db"]
 
-CMD [ "/oxipot/oxipot"]
+CMD ["/usr/local/bin/oxipot"]
