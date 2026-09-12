@@ -9,193 +9,85 @@
 
 use chrono::{DateTime, Utc};
 use log::{error, info, warn};
-use reqwest::blocking::Client;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 use serde::Deserialize;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::collections::HashMap;
-use std::fmt::Debug;
 use std::fs;
-use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
+use std::path::Path;
 use std::process::exit;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::thread::{self, sleep};
 use std::time::Duration;
 
 const CONNECTION_LIMIT: u32 = 10;
 const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
-const CONNECTION_INACTIVITY_TIMEOUT: u64 = 20;
+const CONNECTION_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(20);
+const LOGIN_DELAY: Duration = Duration::from_secs(2);
 
 const DB_URL: &str = "db/oxipot.db";
 const DEFAULT_PORT: u16 = 2223;
 
 const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
+const IP_INFO_TIMEOUT: Duration = Duration::from_secs(3);
+
+const TELNET_ECHO: &[u8] = &[0xff, 0xfb, 0x01];
+const TELNET_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfb, 0x03];
+const TELNET_TERMINAL_TYPE: &[u8] = &[0xff, 0xfd, 0x18];
+const TELNET_TERMINAL_SPEED: &[u8] = &[0xff, 0xfd, 0x1f];
+const TELNET_CARRIAGE_RETURN: &[u8] = &[0x0d];
+const TELNET_TOGGLE_FLOW_CONTROL: &[u8] = &[0xff, 0xfe, 0x20];
+const TELNET_LINE_MODE: &[u8] = &[0xff, 0xfe, 0x21];
+const TELNET_CARRIAGE_RETURN_LINE_FEED: &[u8] = &[0xff, 0xfe, 0x22];
+const TELNET_OUTPUT_MARKING: &[u8] = &[0xff, 0xfe, 0x27];
+const TELNET_NEGOTIATE_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfc, 0x05];
+const TELNET_CRLF: &[u8] = &[0x0d, 0x0a];
+
+const BANNER: &str = "
+
+#############################################################################
+# UNAUTHORIZED ACCESS TO THIS DEVICE IS PROHIBITED You must have explicit,  #
+# authorized permission to access or configure this device.                 #
+# Unauthorized attempts and actions to access or use this system may result #
+# in civil and/or criminal penalties.                                       #
+# All activities performed on this device are logged and monitored.         #
+#############################################################################
+
+";
+
+static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(IP_INFO_TIMEOUT))
+        .build()
+        .into()
+});
+
+type IPInfoCache = HashMap<IpAddr, IPInfo>;
 
 struct Intruder {
     username: String,
     password: String,
     ip_info: IPInfo,
-    ip_v4_address: Option<Ipv4Addr>,
-    ip_v6_address: Option<Ipv6Addr>,
-    ip: String,
+    ip: IpAddr,
     source_port: u16,
     time: DateTime<Utc>,
 }
 
 impl Intruder {
-    fn new() -> Self {
-        Self {
-            username: "".to_string(),
-            password: "".to_string(),
-            ip_info: IPInfo::new(),
-            ip_v4_address: None,
-            ip_v6_address: None,
-            ip: "".to_string(),
-            source_port: 0,
-            time: Utc::now(),
-        }
-    }
-
-    fn set_ip(&mut self) {
-        if let Some(ip) = self.ip_v4_address {
-            self.ip = ip.to_string();
-        } else if let Some(ip) = self.ip_v6_address {
-            self.ip = ip.to_string();
-        } else {
-            self.ip = "".to_string();
-        }
-    }
-
     fn time_to_text(&self) -> String {
         self.time.format("%Y-%m-%d %H:%M:%S").to_string()
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Default, Deserialize, Clone)]
 struct IPInfo {
-    ip: String,
     country_name: String,
     #[serde(rename = "country_code2")]
     country_code: String,
     isp: String,
-}
-
-impl IPInfo {
-    fn new() -> Self {
-        Self {
-            ip: "".to_string(),
-            country_name: "".to_string(),
-            country_code: "".to_string(),
-            isp: "".to_string(),
-        }
-    }
-}
-
-#[derive(Clone)]
-struct IPInfoCache {
-    cache: Vec<IPInfo>,
-}
-
-impl IPInfoCache {
-    fn new() -> Self {
-        IPInfoCache { cache: vec![] }
-    }
-
-    fn retrieve(&self, intruder: &Intruder) -> Option<IPInfo> {
-        let ip_info = self.retrieve_from_memory(intruder);
-
-        if ip_info.is_some() {
-            info!("Found intruder info in memory");
-            return ip_info.clone();
-        }
-
-        // Intruder was not in memory, check the DB
-
-        let ip_info = self.retrieve_from_database(intruder);
-
-        if ip_info.is_some() {
-            info!("Found intruder info in Database");
-            return ip_info.clone();
-        }
-
-        None
-    }
-
-    fn retrieve_from_memory(&self, intruder: &Intruder) -> Option<IPInfo> {
-        info!("Checking memory for intruder info");
-
-        for existing_info in &self.cache {
-            if existing_info.ip == intruder.ip {
-                // If the existing IPInfo's country name is not empty, return it.
-                if !existing_info.country_name.is_empty() {
-                    return Some(existing_info.clone());
-                }
-                break;
-            }
-        }
-        None
-    }
-
-    fn retrieve_from_database(&self, intruder: &Intruder) -> Option<IPInfo> {
-        info!("Checking database for intruder info");
-
-        let conn = Connection::open(DB_URL).unwrap();
-        let result = conn.query_row(
-            "SELECT country_name, country_code, isp from intruders WHERE ip=? ORDER BY id DESC LIMIT 1",
-            [&intruder.ip],
-            |row| {
-                let country_name: String = row.get(0)?;
-                let country_code: String = row.get(1)?;
-                let isp: String = row.get(2)?;
-                Ok(IPInfo {
-                    ip: intruder.ip.clone(),
-                    country_name,
-                    country_code,
-                    isp,
-                })
-            },
-        ).optional();
-
-        result.unwrap_or(None)
-    }
-
-    fn add(&mut self, intruder: &Intruder) {
-        let mut idx_to_remove = None;
-        let mut got_a_match = false;
-
-        for (i, existing_info) in self.cache.iter().enumerate() {
-            if existing_info.ip == intruder.ip {
-                got_a_match = true;
-                info!("got a match for {} in cache", intruder.ip);
-
-                // If the existing IPInfo's country name is empty, mark it for removal.
-                if existing_info.country_name.is_empty() {
-                    info!(
-                        "removing {} from cache due to lack of country info",
-                        existing_info.ip
-                    );
-                    idx_to_remove = Some(i);
-                } else {
-                    return;
-                }
-            }
-        }
-        // If we marked an existing IPInfo for removal, remove it now.
-        if let Some(idx) = idx_to_remove {
-            self.cache.remove(idx);
-        }
-
-        if !got_a_match {
-            info!("got no match for {} in cache", intruder.ip);
-        }
-
-        info!("adding {} to cache", intruder.ip);
-        self.cache.push(intruder.ip_info.clone());
-    }
 }
 
 struct TelnetStream<'a> {
@@ -203,134 +95,44 @@ struct TelnetStream<'a> {
 }
 
 impl<'a> TelnetStream<'a> {
-    fn new(stream: &'a TcpStream) -> TelnetStream<'a> {
-        TelnetStream { stream }
+    fn new(stream: &'a TcpStream) -> Self {
+        Self { stream }
     }
 
     fn write_all(&mut self, buf: &[u8]) {
-        match self.stream.write_all(buf) {
-            Ok(_) => (),
-            Err(e) => match e.kind() {
-                std::io::ErrorKind::ConnectionAborted
-                | std::io::ErrorKind::ConnectionReset
-                | std::io::ErrorKind::BrokenPipe => {
-                    self.close();
-                }
-                _ => self.close(),
-            },
+        if let Err(e) = self.stream.write_all(buf) {
+            warn!("Could not write to the telnet stream: {e}");
+            self.close();
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self.stream.read(buf) {
             Ok(n) => Ok(n),
-            Err(e) => match e.kind() {
-                std::io::ErrorKind::ConnectionAborted
-                | std::io::ErrorKind::ConnectionReset
-                | std::io::ErrorKind::BrokenPipe => {
-                    warn!("Connection closed by peer");
-                    self.close();
-                    Err(e)
-                }
-                _ => {
-                    self.close();
-                    Err(e)
-                }
-            },
-        }
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        match self.stream.flush() {
-            Ok(_) => Ok(()),
-            Err(e) => match e.kind() {
-                std::io::ErrorKind::ConnectionAborted
-                | std::io::ErrorKind::ConnectionReset
-                | std::io::ErrorKind::BrokenPipe => {
-                    warn!("Connection closed by peer");
-                    self.close();
-                    Err(e)
-                }
-                _ => {
-                    self.close();
-                    Err(e)
-                }
-            },
+            Err(e) => {
+                warn!("Could not read from the telnet stream: {e}");
+                self.close();
+                Err(e)
+            }
         }
     }
 
     fn close(&mut self) {
-        match self.stream.shutdown(Shutdown::Both) {
-            Ok(_) => {
-                info!("Connection closed successfully");
-            }
-            Err(e) => {
-                error!("Encountered {:?} while shutting down the TCP stream", e);
-            }
+        if let Err(e) = self.stream.shutdown(Shutdown::Both) {
+            error!("Encountered {e:?} while shutting down the TCP stream");
         }
     }
-}
-
-enum TelnetCommand {
-    Echo,
-    SuppressGoAhead,
-    TerminalType,
-    TerminalSpeed,
-    CarriageReturn,
-    ToggleFlowControl,
-    LineMode,
-    CarriageReturnLineFeed,
-    OutputMarking,
-    NegotiateSuppressGoAhead,
-    CarriageReturnLineFeedCRLF,
-}
-
-impl TelnetCommand {
-    fn as_bytes(&self) -> &[u8] {
-        match self {
-            TelnetCommand::Echo => &[0xff, 0xfb, 0x01],
-            TelnetCommand::SuppressGoAhead => &[0xff, 0xfb, 0x03],
-            TelnetCommand::TerminalType => &[0xff, 0xfd, 0x18],
-            TelnetCommand::TerminalSpeed => &[0xff, 0xfd, 0x1f],
-            TelnetCommand::CarriageReturn => &[0x0d],
-            TelnetCommand::ToggleFlowControl => &[0xff, 0xfe, 0x20],
-            TelnetCommand::LineMode => &[0xff, 0xfe, 0x21],
-            TelnetCommand::CarriageReturnLineFeed => &[0xff, 0xfe, 0x22],
-            TelnetCommand::OutputMarking => &[0xff, 0xfe, 0x27],
-            TelnetCommand::NegotiateSuppressGoAhead => &[0xff, 0xfc, 0x05],
-            TelnetCommand::CarriageReturnLineFeedCRLF => &[0x0d, 0x0a],
-        }
-    }
-}
-
-fn create_database() -> Result<(), Box<dyn std::error::Error>> {
-    info!("Checking the existence of DB file at: {} ", DB_URL);
-
-    let dir = DB_URL.split('/').next().unwrap_or(".");
-    fs::create_dir_all(dir)?;
-
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(DB_URL)
-        .expect("Could not create oxipot.db");
-
-    Ok(())
 }
 
 fn create_intruders_table() -> rusqlite::Result<()> {
-    match create_database() {
-        Ok(_) => {}
-        Err(_) => exit(1),
+    if let Some(dir) = Path::new(DB_URL).parent() {
+        fs::create_dir_all(dir).expect("Could not create the database directory");
     }
 
-    info!("Creating Database: {} ", DB_URL);
-    let mut conn = Connection::open(DB_URL).unwrap();
-    let tx = conn.transaction().unwrap();
+    info!("Opening database: {DB_URL}");
+    let conn = Connection::open(DB_URL)?;
 
-    match tx.execute(
+    conn.execute(
         "CREATE TABLE IF NOT EXISTS intruders (
             id INTEGER PRIMARY KEY NOT NULL,
             username VARCHAR(250),
@@ -343,29 +145,17 @@ fn create_intruders_table() -> rusqlite::Result<()> {
             time TIMESTAMP
         )",
         (),
-    ) {
-        Ok(it) => {
-            info!("Successfully created intruders table");
-            it
-        }
-        Err(err) => {
-            error!("Error creating intruders table: {}", err);
-            return Err(err);
-        }
-    };
+    )?;
 
-    tx.commit().unwrap();
-    conn.close().unwrap();
+    info!("The intruders table is ready");
 
     Ok(())
 }
 
 fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
-    info!("Inserting intruder's info into Database: {} ", DB_URL);
-    let mut conn = Connection::open(DB_URL).unwrap();
-    let tx = conn.transaction().unwrap();
+    let conn = Connection::open(DB_URL)?;
 
-    tx.execute(
+    conn.execute(
         "INSERT INTO intruders (
         username,
         password,
@@ -376,118 +166,109 @@ fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
         isp,
         time) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         (
-            intruder.username.clone(),
-            intruder.password.clone(),
-            intruder.ip.clone(),
+            &intruder.username,
+            &intruder.password,
+            intruder.ip.to_string(),
             intruder.source_port,
-            intruder.ip_info.country_name.clone(),
-            intruder.ip_info.country_code.clone(),
-            intruder.ip_info.isp.clone(),
+            &intruder.ip_info.country_name,
+            &intruder.ip_info.country_code,
+            &intruder.ip_info.isp,
             intruder.time_to_text(),
         ),
     )?;
 
-    info!(
-        "inserted intruder {} information into database",
-        intruder.ip
-    );
-
-    tx.commit().unwrap();
-    conn.close().unwrap();
+    info!("Inserted intruder {} into the database", intruder.ip);
 
     Ok(())
 }
 
-fn is_private_ip(ip: &str) -> bool {
-    let ip_addr = match ip.parse::<IpAddr>() {
-        Ok(ip_addr) => ip_addr,
-        Err(_) => return false,
-    };
+fn ip_info_from_db(ip: IpAddr) -> Option<IPInfo> {
+    let conn = Connection::open(DB_URL).ok()?;
 
-    match ip_addr {
+    conn.query_row(
+        "SELECT country_name, country_code, isp FROM intruders
+         WHERE ip = ? AND country_name != '' ORDER BY id DESC LIMIT 1",
+        [ip.to_string()],
+        |row| {
+            Ok(IPInfo {
+                country_name: row.get(0)?,
+                country_code: row.get(1)?,
+                isp: row.get(2)?,
+            })
+        },
+    )
+    .ok()
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn is_private_ip(ip: IpAddr) -> bool {
+    match ip {
         IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
-        IpAddr::V6(_) => false,
+        IpAddr::V6(ipv6) => ipv6.is_loopback(),
     }
 }
 
-fn whois(intruder: &mut Intruder) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Looking up {:?}", intruder.ip);
-    let query_url = format!("{}{}", IP_INFO_PROVIDER, intruder.ip);
+fn whois(ip: IpAddr) -> Result<IPInfo, ureq::Error> {
+    info!("Looking up {ip}");
 
-    // let client = reqwest::Client::builder()
-    //     .timeout(Duration::from_secs(3))
-    //     .build()?;
-
-    let client = Client::new();
-
-    let resp: IPInfo = client.get(query_url).send()?.json()?;
-    intruder.ip_info = resp;
-
-    Ok(())
+    HTTP.get(format!("{IP_INFO_PROVIDER}{ip}"))
+        .call()?
+        .body_mut()
+        .read_json()
 }
 
-fn default_banner() -> String {
-    "
-
-#############################################################################
-# UNAUTHORIZED ACCESS TO THIS DEVICE IS PROHIBITED You must have explicit,  #
-# authorized permission to access or configure this device.                 #
-# Unauthorized attempts and actions to access or use this system may result #
-# in civil and/or criminal penalties.                                       #
-# All activities performed on this device are logged and monitored.         #
-#############################################################################
-
-"
-    .to_string()
-}
-
-fn print_banner(stream: &TcpStream, banner: Option<String>) -> io::Result<()> {
-    let mut stream = stream;
-
-    match banner {
-        Some(banner) => {
-            stream.write_all(banner.as_bytes())?;
-        }
-        None => {
-            stream.write_all(default_banner().as_bytes())?;
-        }
+fn lookup_ip_info(cache: &Mutex<IPInfoCache>, intruder: &mut Intruder) {
+    if let Some(ip_info) = lock(cache).get(&intruder.ip).cloned() {
+        info!("Found {} in the in-memory cache", intruder.ip);
+        intruder.ip_info = ip_info;
+        return;
     }
 
-    Ok(())
+    if let Some(ip_info) = ip_info_from_db(intruder.ip) {
+        info!("Found {} in the database", intruder.ip);
+        lock(cache).insert(intruder.ip, ip_info.clone());
+        intruder.ip_info = ip_info;
+        return;
+    }
+
+    if is_private_ip(intruder.ip) {
+        return;
+    }
+
+    match whois(intruder.ip) {
+        Ok(ip_info) => {
+            lock(cache).insert(intruder.ip, ip_info.clone());
+            intruder.ip_info = ip_info;
+        }
+        Err(e) => warn!("Could not look up {}: {e}", intruder.ip),
+    }
 }
 
-fn get_telnet_username(stream: &TcpStream, intruder: &mut Intruder) {
-    let mut telnet_stream = TelnetStream::new(stream);
-
-    telnet_stream.write_all(b"login: ");
-
-    let username = read_until_cr(telnet_stream.stream);
-    intruder.username = username.trim().to_string().clone();
-}
-
-fn read_until_cr(stream: &TcpStream) -> String {
-    let mut telnet_stream = TelnetStream::new(stream);
+fn read_until_cr(telnet: &mut TelnetStream) -> String {
     let mut buffer = Vec::new();
 
     'outer: loop {
-        telnet_stream.flush().unwrap();
-
         let mut buf = [0; 1024];
-        let n = telnet_stream.read(&mut buf).unwrap(); // TODO: this errors out: panicked at 'called `Result::unwrap()` on an `Err` value: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }'
 
-        if n == 0 {
-            return String::from_utf8(buffer).unwrap();
-        }
+        let n = match telnet.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
 
-        let s = match std::str::from_utf8(&buf[..n]) {
-            Ok(s) => s,
+        let text = match std::str::from_utf8(&buf[..n]) {
+            Ok(text) => text,
             Err(e) => {
-                warn!("Problem reading telnet stream data: {}", e);
+                warn!("Problem reading telnet stream data: {e}");
                 continue;
             }
         };
 
-        for c in s.chars() {
+        for c in text.chars() {
             if c == '\r' || c == '\n' {
                 break 'outer;
             }
@@ -498,30 +279,37 @@ fn read_until_cr(stream: &TcpStream) -> String {
         }
     }
 
-    String::from_utf8(buffer).unwrap()
+    String::from_utf8_lossy(&buffer).trim().to_string()
 }
 
-fn get_telnet_password(stream: &TcpStream, intruder: &mut Intruder) {
-    let mut telnet_stream = TelnetStream::new(stream);
+fn get_telnet_username(stream: &TcpStream) -> String {
+    let mut telnet = TelnetStream::new(stream);
 
-    telnet_stream.write_all(TelnetCommand::Echo.as_bytes());
-    telnet_stream.write_all(TelnetCommand::SuppressGoAhead.as_bytes());
-    telnet_stream.write_all(TelnetCommand::TerminalType.as_bytes());
-    telnet_stream.write_all(TelnetCommand::TerminalSpeed.as_bytes());
-    telnet_stream.write_all(TelnetCommand::CarriageReturn.as_bytes());
-    telnet_stream.write_all(b"Password: ");
-    telnet_stream.write_all(TelnetCommand::ToggleFlowControl.as_bytes());
-    telnet_stream.write_all(TelnetCommand::LineMode.as_bytes());
-    telnet_stream.write_all(TelnetCommand::CarriageReturnLineFeed.as_bytes());
-    telnet_stream.write_all(TelnetCommand::OutputMarking.as_bytes());
-    telnet_stream.write_all(TelnetCommand::NegotiateSuppressGoAhead.as_bytes());
+    telnet.write_all(BANNER.as_bytes());
+    telnet.write_all(b"login: ");
 
-    let mut password = read_until_cr(telnet_stream.stream);
-    telnet_stream.write_all(TelnetCommand::CarriageReturnLineFeedCRLF.as_bytes());
+    read_until_cr(&mut telnet)
+}
 
-    password = password.trim().to_string();
+fn get_telnet_password(stream: &TcpStream) -> String {
+    let mut telnet = TelnetStream::new(stream);
 
-    intruder.password = password.clone();
+    telnet.write_all(TELNET_ECHO);
+    telnet.write_all(TELNET_SUPPRESS_GO_AHEAD);
+    telnet.write_all(TELNET_TERMINAL_TYPE);
+    telnet.write_all(TELNET_TERMINAL_SPEED);
+    telnet.write_all(TELNET_CARRIAGE_RETURN);
+    telnet.write_all(b"Password: ");
+    telnet.write_all(TELNET_TOGGLE_FLOW_CONTROL);
+    telnet.write_all(TELNET_LINE_MODE);
+    telnet.write_all(TELNET_CARRIAGE_RETURN_LINE_FEED);
+    telnet.write_all(TELNET_OUTPUT_MARKING);
+    telnet.write_all(TELNET_NEGOTIATE_SUPPRESS_GO_AHEAD);
+
+    let password = read_until_cr(&mut telnet);
+    telnet.write_all(TELNET_CRLF);
+
+    password
 }
 
 fn display_intruder_info(intruder: &Intruder) {
@@ -530,124 +318,95 @@ fn display_intruder_info(intruder: &Intruder) {
     info!("IP address: {}", intruder.ip);
     info!("Source port: {}", intruder.source_port);
     info!("Time: {}", intruder.time_to_text());
-
-    info!("ip: {}", intruder.ip_info.ip);
-    info!("country_name: {}", intruder.ip_info.country_name);
-    info!("country_code: {}", intruder.ip_info.country_code);
+    info!("Country name: {}", intruder.ip_info.country_name);
+    info!("Country code: {}", intruder.ip_info.country_code);
     info!("ISP: {}", intruder.ip_info.isp);
 }
 
-fn handle_telnet_client(stream: TcpStream, intruder: &mut Intruder) -> io::Result<()> {
-    let _ = print_banner(&stream, None);
-
-    get_telnet_username(&stream, intruder);
-    get_telnet_password(&stream, intruder);
-
-    sleep(Duration::new(2, 0));
-
-    Ok(())
-}
-
-fn log_incoming_connection(ip_address: IpAddr, source_port: u16, intruder: &mut Intruder) {
-    intruder.time = Utc::now();
-
-    if let IpAddr::V4(ipv4) = ip_address {
-        intruder.ip_v4_address = Some(ipv4);
-    } else if let IpAddr::V6(ipv6) = ip_address {
-        intruder.ip_v6_address = Some(ipv6);
-    }
-
-    intruder.set_ip();
-    intruder.source_port = source_port;
-}
-
-fn handle_connection(stream: TcpStream, ip_info_cache: &Arc<Mutex<IPInfoCache>>) -> io::Result<()> {
-    let ip_address = stream.peer_addr().unwrap().ip();
-    let source_port = stream.peer_addr().unwrap().port();
+fn handle_connection(stream: TcpStream, cache: &Mutex<IPInfoCache>) {
+    let peer = match stream.peer_addr() {
+        Ok(peer) => peer,
+        Err(e) => {
+            warn!("Could not determine the peer address: {e}");
+            return;
+        }
+    };
 
     info!(
         "[+] connection from {} with source port {}",
-        ip_address, source_port
+        peer.ip(),
+        peer.port()
     );
 
-    // TODO: read_timeout instead of set_timeout
-    stream
-        .set_read_timeout(Some(Duration::from_secs(CONNECTION_INACTIVITY_TIMEOUT)))
-        .unwrap();
+    let timeout = Some(CONNECTION_INACTIVITY_TIMEOUT);
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
 
-    stream
-        .set_write_timeout(Some(Duration::from_secs(CONNECTION_INACTIVITY_TIMEOUT)))
-        .unwrap();
+    let mut intruder = Intruder {
+        username: get_telnet_username(&stream),
+        password: get_telnet_password(&stream),
+        ip_info: IPInfo::default(),
+        ip: peer.ip(),
+        source_port: peer.port(),
+        time: Utc::now(),
+    };
 
-    let mut intruder = Intruder::new();
+    sleep(LOGIN_DELAY);
 
-    log_incoming_connection(ip_address, source_port, &mut intruder);
+    lookup_ip_info(cache, &mut intruder);
 
-    let _ = handle_telnet_client(stream, &mut intruder);
-
-    let cache_guard = ip_info_cache.lock().map_err(|_| io::ErrorKind::Other)?;
-    let mut ip_info_cache = cache_guard;
-
-    if let Some(ip_info) = ip_info_cache.retrieve(&intruder) {
-        info!("The intruder {} exists in cache", intruder.ip);
-        intruder.ip_info = ip_info;
-    } else {
-        info!("The intruder {} does not exist in cache", intruder.ip);
-        if !(is_private_ip(&intruder.ip)) {
-            let _ = whois(&mut intruder);
-            ip_info_cache.add(&intruder)
-        }
+    if let Err(e) = log_to_db(&intruder) {
+        error!("Could not store intruder {}: {e}", intruder.ip);
     }
 
-    let _ = log_to_db(&intruder);
-
     display_intruder_info(&intruder);
-
-    Ok(())
 }
 
-fn listen(port: u16) -> std::io::Result<()> {
-    let listener = TcpListener::bind(format!("0.0.0.0:{}", port)).unwrap();
+fn listen(port: u16) -> io::Result<()> {
+    let listener = TcpListener::bind(("0.0.0.0", port))?;
+    info!("Listening on port {port}");
 
-    let ip_info_cache = Arc::new(Mutex::new(IPInfoCache::new()));
+    let cache = Arc::new(Mutex::new(IPInfoCache::new()));
 
     let rate_limiter = Arc::new(Mutex::new(HashMap::<IpAddr, u32>::new()));
-    let rate_limiter_cloned = Arc::clone(&rate_limiter);
+    let rate_limiter_cleaner = Arc::clone(&rate_limiter);
 
-    // rate_limiter cleaner task
     thread::spawn(move || {
         loop {
             thread::sleep(CONNECTION_FLUSH_TIME_PERIOD);
-
-            let mut rate_limiter = rate_limiter_cloned.lock().unwrap();
-            rate_limiter.clear();
+            lock(&rate_limiter_cleaner).clear();
         }
     });
 
-    while let Ok((stream, addr)) = listener.accept() {
-        let mut rate_limiter = rate_limiter.lock().unwrap();
-
-        if let Some(count) = rate_limiter.get_mut(&addr.ip()) {
-            if *count >= CONNECTION_LIMIT {
-                warn!("Rate limiting {}", addr.ip());
-                stream.shutdown(Shutdown::Both)?;
+    loop {
+        let (stream, addr) = match listener.accept() {
+            Ok(connection) => connection,
+            Err(e) => {
+                warn!("Could not accept a connection: {e}");
                 continue;
             }
-            *count += 1;
-        } else {
-            rate_limiter.insert(addr.ip(), 1);
+        };
+
+        let connections = {
+            let mut rate_limiter = lock(&rate_limiter);
+            let connections = rate_limiter.entry(addr.ip()).or_insert(0);
+            *connections += 1;
+            *connections
+        };
+
+        if connections > CONNECTION_LIMIT {
+            warn!("Rate limiting {}", addr.ip());
+            let _ = stream.shutdown(Shutdown::Both);
+            continue;
         }
 
-        let ip_info_cache = ip_info_cache.clone();
-
-        thread::spawn(move || {
-            let _ = handle_connection(stream, &ip_info_cache);
-        });
+        let cache = Arc::clone(&cache);
+        thread::spawn(move || handle_connection(stream, &cache));
     }
-
-    Ok(())
 }
 
+// Required rather than relying on the default disposition: oxipot runs as PID 1
+// in its container, where unhandled SIGTERM and SIGINT are ignored.
 fn handle_signal() {
     let mut signals = Signals::new([SIGINT, SIGTERM]).unwrap();
 
@@ -664,13 +423,15 @@ fn handle_signal() {
 fn main() {
     env_logger::init();
 
-    let db_result = create_intruders_table();
-    match db_result {
-        Ok(()) => (),
-        Err(_) => exit(1),
+    if let Err(e) = create_intruders_table() {
+        error!("Could not prepare the database: {e}");
+        exit(1);
     }
 
     thread::spawn(handle_signal);
 
-    listen(DEFAULT_PORT).unwrap();
+    if let Err(e) = listen(DEFAULT_PORT) {
+        error!("Could not listen on port {DEFAULT_PORT}: {e}");
+        exit(1);
+    }
 }
