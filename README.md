@@ -109,12 +109,25 @@ Utilizing sqlite3, you can view the reports.
 2. Run your query:
 
    ```sql
-   SELECT * FROM intruders;
+   .mode box
+   SELECT time, ip, country_name, username, password FROM intruders ORDER BY time DESC LIMIT 5;
    ```
 
 The result will be similar to:
 
-![oxipot_report](artwork/oxipot_example_report.png)
+```text
+┌─────────────────────┬─────────────────┬──────────────┬──────────┬──────────────────────────────────────┐
+│        time         │       ip        │ country_name │ username │               password               │
+├─────────────────────┼─────────────────┼──────────────┼──────────┼──────────────────────────────────────┤
+│ 2025-09-12 18:45:30 │ 185.44.81.104   │ France       │ telnet   │ telnet                               │
+│ 2025-09-12 18:44:02 │ 111.92.20.228   │ India        │ guest    │ 123456                               │
+│ 2025-09-12 18:43:55 │ 124.234.245.229 │ China        │ enable   │ cat /proc/mounts; /bin/busybox SCWCD │
+│ 2025-09-12 18:42:19 │ 95.214.27.248   │ Netherlands  │ admin    │ 1234                                 │
+│ 2025-09-12 18:41:07 │ 103.79.142.242  │ Viet Nam     │ root     │ admin                                │
+└─────────────────────┴─────────────────┴──────────────┴──────────┴──────────────────────────────────────┘
+```
+
+> The `intruders` table also holds `source_port`, `country_code` and `isp`. Use `SELECT * FROM intruders;` to see everything.
 
 ## Disclaimer
 
