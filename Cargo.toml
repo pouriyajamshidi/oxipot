@@ -3,6 +3,7 @@ name = "oxipot"
 description = "Network honeypot to catch IT, OT, and IoT bots"
 version = "0.4.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["Pouriya Jamshidi"]
 repository = "https://github.com/pouriyajamshidi/oxipot"
 readme = "README.md"
@@ -15,14 +16,13 @@ lto = true
 strip = true
 
 [dependencies]
-rusqlite = { version = "*", features = ["bundled"] }
-log = "*"
-env_logger = "*"
-serde = { version = "*", features = ["derive"] }
-reqwest = { version = "*", default-features = false, features = [
+chrono = "0.4"
+env_logger = "0.11"
+log = "0.4"
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+signal-hook = "0.4"
+ureq = { version = "3.4", default-features = false, features = [
+    "rustls",
     "json",
-    "blocking",
-    "rustls-tls",
 ] }
-chrono = "*"
-signal-hook = "0.4.4"
