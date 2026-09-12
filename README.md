@@ -57,12 +57,15 @@ This is the recommended way since it will always makes sure the container remain
 
 Directly using the executable is not recommended. This method should be used only if you know your craft.
 
-1. Download [the executable](https://github.com/pouriyajamshidi/oxipot/releases/latest/download/oxipot.tar.gz).
+1. Download the executable for your architecture:
+   [x86_64](https://github.com/pouriyajamshidi/oxipot/releases/latest/download/oxipot-linux-x86_64.tar.gz)
+   or
+   [aarch64](https://github.com/pouriyajamshidi/oxipot/releases/latest/download/oxipot-linux-aarch64.tar.gz).
 
 2. Extract the file:
 
    ```bash
-   tar -zxvf oxipot.tar.gz
+   tar -zxvf oxipot-linux-x86_64.tar.gz
    ```
 
 3. Make it executable:
