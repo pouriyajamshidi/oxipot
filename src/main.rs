@@ -8,7 +8,6 @@
 //
 
 use chrono::{DateTime, Utc};
-use env_logger;
 use log::{error, info, warn};
 use reqwest::blocking::Client;
 use rusqlite::{Connection, OptionalExtension};
@@ -109,7 +108,7 @@ impl IPInfoCache {
     fn retrieve(&self, intruder: &Intruder) -> Option<IPInfo> {
         let ip_info = self.retrieve_from_memory(intruder);
 
-        if let Some(_) = ip_info {
+        if ip_info.is_some() {
             info!("Found intruder info in memory");
             return ip_info.clone();
         }
@@ -118,12 +117,12 @@ impl IPInfoCache {
 
         let ip_info = self.retrieve_from_database(intruder);
 
-        if let Some(_) = ip_info {
+        if ip_info.is_some() {
             info!("Found intruder info in Database");
             return ip_info.clone();
         }
 
-        return None;
+        None
     }
 
     fn retrieve_from_memory(&self, intruder: &Intruder) -> Option<IPInfo> {
@@ -138,7 +137,7 @@ impl IPInfoCache {
                 break;
             }
         }
-        return None;
+        None
     }
 
     fn retrieve_from_database(&self, intruder: &Intruder) -> Option<IPInfo> {
@@ -147,7 +146,7 @@ impl IPInfoCache {
         let conn = Connection::open(DB_URL).unwrap();
         let result = conn.query_row(
             "SELECT country_name, country_code, isp from intruders WHERE ip=? ORDER BY id DESC LIMIT 1",
-            &[&intruder.ip],
+            [&intruder.ip],
             |row| {
                 let country_name: String = row.get(0)?;
                 let country_code: String = row.get(1)?;
@@ -314,6 +313,7 @@ fn create_database() -> Result<(), Box<dyn std::error::Error>> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .open(DB_URL)
         .expect("Could not create oxipot.db");
 
@@ -379,7 +379,7 @@ fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
             intruder.username.clone(),
             intruder.password.clone(),
             intruder.ip.clone(),
-            intruder.source_port.clone(),
+            intruder.source_port,
             intruder.ip_info.country_name.clone(),
             intruder.ip_info.country_code.clone(),
             intruder.ip_info.isp.clone(),
@@ -398,7 +398,7 @@ fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
     Ok(())
 }
 
-fn is_private_ip(ip: &String) -> bool {
+fn is_private_ip(ip: &str) -> bool {
     let ip_addr = match ip.parse::<IpAddr>() {
         Ok(ip_addr) => ip_addr,
         Err(_) => return false,
@@ -427,7 +427,7 @@ fn whois(intruder: &mut Intruder) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn default_banner() -> String {
-    return "
+    "
 
 #############################################################################
 # UNAUTHORIZED ACCESS TO THIS DEVICE IS PROHIBITED You must have explicit,  #
@@ -438,7 +438,7 @@ fn default_banner() -> String {
 #############################################################################
 
 "
-    .to_string();
+    .to_string()
 }
 
 fn print_banner(stream: &TcpStream, banner: Option<String>) -> io::Result<()> {
@@ -461,7 +461,7 @@ fn get_telnet_username(stream: &TcpStream, intruder: &mut Intruder) {
 
     telnet_stream.write_all(b"login: ");
 
-    let username = read_until_cr(&telnet_stream.stream);
+    let username = read_until_cr(telnet_stream.stream);
     intruder.username = username.trim().to_string().clone();
 }
 
@@ -516,7 +516,7 @@ fn get_telnet_password(stream: &TcpStream, intruder: &mut Intruder) {
     telnet_stream.write_all(TelnetCommand::OutputMarking.as_bytes());
     telnet_stream.write_all(TelnetCommand::NegotiateSuppressGoAhead.as_bytes());
 
-    let mut password = read_until_cr(&telnet_stream.stream);
+    let mut password = read_until_cr(telnet_stream.stream);
     telnet_stream.write_all(TelnetCommand::CarriageReturnLineFeedCRLF.as_bytes());
 
     password = password.trim().to_string();
@@ -537,11 +537,11 @@ fn display_intruder_info(intruder: &Intruder) {
     info!("ISP: {}", intruder.ip_info.isp);
 }
 
-fn handle_telnet_client(stream: TcpStream, mut intruder: &mut Intruder) -> io::Result<()> {
+fn handle_telnet_client(stream: TcpStream, intruder: &mut Intruder) -> io::Result<()> {
     let _ = print_banner(&stream, None);
 
-    let _ = get_telnet_username(&stream, &mut intruder);
-    let _ = get_telnet_password(&stream, &mut intruder);
+    get_telnet_username(&stream, intruder);
+    get_telnet_password(&stream, intruder);
 
     sleep(Duration::new(2, 0));
 
@@ -615,11 +615,13 @@ fn listen(port: u16) -> std::io::Result<()> {
     let rate_limiter_cloned = Arc::clone(&rate_limiter);
 
     // rate_limiter cleaner task
-    thread::spawn(move || loop {
-        thread::sleep(CONNECTION_FLUSH_TIME_PERIOD);
+    thread::spawn(move || {
+        loop {
+            thread::sleep(CONNECTION_FLUSH_TIME_PERIOD);
 
-        let mut rate_limiter = rate_limiter_cloned.lock().unwrap();
-        rate_limiter.clear();
+            let mut rate_limiter = rate_limiter_cloned.lock().unwrap();
+            rate_limiter.clear();
+        }
     });
 
     while let Ok((stream, addr)) = listener.accept() {
@@ -647,20 +649,15 @@ fn listen(port: u16) -> std::io::Result<()> {
 }
 
 fn handle_signal() {
-    let mut signals = Signals::new(&[SIGINT, SIGTERM]).unwrap();
+    let mut signals = Signals::new([SIGINT, SIGTERM]).unwrap();
 
     for signal in signals.forever() {
         match signal {
-            SIGINT => {
-                info!("\nReceived SIGINT, cleaning up and shutting down.");
-                exit(0);
-            }
-            SIGTERM => {
-                info!("\nReceived SIGTERM, cleaning up and shutting down.");
-                exit(0);
-            }
-            _ => return,
+            SIGINT => info!("Received SIGINT, cleaning up and shutting down."),
+            SIGTERM => info!("Received SIGTERM, cleaning up and shutting down."),
+            _ => continue,
         }
+        exit(0);
     }
 }
 
@@ -673,7 +670,7 @@ fn main() {
         Err(_) => exit(1),
     }
 
-    thread::spawn(move || handle_signal());
+    thread::spawn(handle_signal);
 
     listen(DEFAULT_PORT).unwrap();
 }
