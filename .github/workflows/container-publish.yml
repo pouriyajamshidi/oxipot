@@ -1,10 +1,7 @@
 name: Docker container build
 
 on:
-  workflow_run:
-    workflows: ["rust"]
-    types:
-      - completed
+  push:
     branches: ["master"]
     tags: ["v*.*.*"]
 
@@ -21,38 +18,8 @@ jobs:
       id-token: write
 
     steps:
-      - name: Extract Version
-        id: version_step
-        run: |
-          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-          echo "VERSION_TAG=$GITHUB_REPOSITORY:${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-          echo "LATEST_TAG=$GITHUB_REPOSITORY:latest" >> $GITHUB_ENV
-
-      - name: Print Version
-        run: |
-          echo ${{ env.VERSION }}
-          echo ${{ env.VERSION_TAG }}
-          echo ${{ env.LATEST_TAG }}
-
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Extract tag or use latest
-        id: extract_tag
-        run: |
-          TAG_NAME=$(git tag --contains ${{ github.sha }})
-          REPO_NAME=$(echo $REPO_NAME | tr '[:upper:]' '[:lower:]')
-          if [ -z "$TAG_NAME" ]; then
-            echo "TAG_NAME=latest" >> $GITHUB_ENV
-          else
-            echo "TAG_NAME=$REPO_NAME:$TAG_NAME" >> $GITHUB_ENV
-          fi
-
-      - name: Install Rust stable toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Check code compile
-        run: cargo check
 
       - name: Login to DockerHub
         uses: docker/login-action@v4.6.0
@@ -61,7 +28,6 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_PASS }}
 
       - name: Login to GitHub Container Registry ${{ env.REGISTRY }}
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -86,7 +52,4 @@ jobs:
           context: ./
           push: true
           tags: ${{ steps.meta.outputs.tags }}
-          # tags: |
-          #   ${{ secrets.DOCKER_HUB_USERNAME }}/oxipot:${{ env.TAG_NAME }}
-          #   ${{ env.REGISTRY }}/${{ github.repository }}/oxipot:${{ env.TAG_NAME }}
-          # labels: ${{ steps.meta.outputs.labels }}
+          labels: ${{ steps.meta.outputs.labels }}
