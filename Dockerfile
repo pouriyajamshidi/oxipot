@@ -1,39 +1,26 @@
-FROM ubuntu:latest AS builder
+FROM rust:1.98.1-alpine3.24 AS builder
 
 LABEL maintainer="Pouriya Jamshidi"
 
-RUN DEBIAN_FRONTEND=noninteractive \
-    apt-get update \
-    && apt-get install -y --no-install-recommends \
-    curl \
-    ca-certificates \
-    tar \
-    make \
-    build-essential \
-    musl-tools \
-    musl-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-ENV PATH="/root/.cargo/bin:${PATH}"
-
-RUN rustup target add x86_64-unknown-linux-musl
+RUN apk add --no-cache musl-dev
 
 WORKDIR /oxipot
 
 COPY ./Cargo.lock ./Cargo.toml ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN cargo build --release
 RUN rm -rf src
 
 COPY ./src ./src
-RUN touch src/main.rs && cargo build --release --target x86_64-unknown-linux-musl
+RUN touch src/main.rs && cargo build --release
 
-FROM alpine:latest
+FROM alpine:3.24
 
-COPY --from=builder /oxipot/target/x86_64-unknown-linux-musl/release/oxipot /usr/local/bin/oxipot
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN apk add --no-cache ca-certificates
+
+WORKDIR /oxipot
+
+COPY --from=builder /oxipot/target/release/oxipot /usr/local/bin/oxipot
 
 ENV TZ=Europe/Brussels
 ENV RUST_LOG=info
