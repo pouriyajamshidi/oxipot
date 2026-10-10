@@ -37,6 +37,11 @@ const MMDB_PATH: &str = "db/ip66.mmdb";
 const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
 const IP_INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
+// Every telnet command starts with this byte.
+const TELNET_IAC: u8 = 0xff;
+const TELNET_SUBNEGOTIATION_START: u8 = 0xfa;
+const TELNET_SUBNEGOTIATION_END: u8 = 0xf0;
+
 const TELNET_ECHO: &[u8] = &[0xff, 0xfb, 0x01];
 const TELNET_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfb, 0x03];
 const TELNET_TERMINAL_TYPE: &[u8] = &[0xff, 0xfd, 0x18];
@@ -220,12 +225,32 @@ impl<'a> TelnetStream<'a> {
                 // What is left of the previous line's "\r\n" or "\r\0".
                 b'\n' | 0 if line.is_empty() => continue,
                 b'\r' | b'\n' => break,
+                TELNET_IAC => self.skip_command(),
                 byte if byte.is_ascii() => line.push(byte),
                 _ => {}
             }
         }
 
         String::from_utf8_lossy(&line).trim().to_string()
+    }
+
+    // Clients answer our telnet options, often in the same packet as their
+    // username or password, so the command bytes must be skipped one by one.
+    fn skip_command(&mut self) {
+        match self.read_byte() {
+            // WILL, WONT, DO and DONT are followed by one option byte.
+            Some(0xfb..=0xfe) => {
+                self.read_byte();
+            }
+            Some(TELNET_SUBNEGOTIATION_START) => {
+                while let Some(byte) = self.read_byte() {
+                    if byte == TELNET_IAC && self.read_byte() == Some(TELNET_SUBNEGOTIATION_END) {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
     }
 
     fn read_byte(&mut self) -> Option<u8> {
