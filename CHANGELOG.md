@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Migrated to the Rust 2024 edition, with a minimum supported Rust version of 1.85.
+- Migrated to the Rust 2024 edition, with a minimum supported Rust version of 1.88.
 - Replaced `reqwest` with `ureq` for the IP lookup, cutting the dependency tree
   from 123 crates to 68.
 - Pinned the dependency versions in `Cargo.toml` instead of accepting `*`.
