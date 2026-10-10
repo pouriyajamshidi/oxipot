@@ -42,16 +42,16 @@ const TELNET_IAC: u8 = 0xff;
 const TELNET_SUBNEGOTIATION_START: u8 = 0xfa;
 const TELNET_SUBNEGOTIATION_END: u8 = 0xf0;
 
-const TELNET_ECHO: &[u8] = &[0xff, 0xfb, 0x01];
-const TELNET_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfb, 0x03];
-const TELNET_TERMINAL_TYPE: &[u8] = &[0xff, 0xfd, 0x18];
-const TELNET_TERMINAL_SPEED: &[u8] = &[0xff, 0xfd, 0x1f];
+const TELNET_WILL_ECHO: &[u8] = &[0xff, 0xfb, 0x01];
+const TELNET_WILL_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfb, 0x03];
+const TELNET_DO_TERMINAL_TYPE: &[u8] = &[0xff, 0xfd, 0x18];
+const TELNET_DO_WINDOW_SIZE: &[u8] = &[0xff, 0xfd, 0x1f];
 const TELNET_CARRIAGE_RETURN: &[u8] = &[0x0d];
-const TELNET_TOGGLE_FLOW_CONTROL: &[u8] = &[0xff, 0xfe, 0x20];
-const TELNET_LINE_MODE: &[u8] = &[0xff, 0xfe, 0x21];
-const TELNET_CARRIAGE_RETURN_LINE_FEED: &[u8] = &[0xff, 0xfe, 0x22];
-const TELNET_OUTPUT_MARKING: &[u8] = &[0xff, 0xfe, 0x27];
-const TELNET_NEGOTIATE_SUPPRESS_GO_AHEAD: &[u8] = &[0xff, 0xfc, 0x05];
+const TELNET_DONT_TERMINAL_SPEED: &[u8] = &[0xff, 0xfe, 0x20];
+const TELNET_DONT_FLOW_CONTROL: &[u8] = &[0xff, 0xfe, 0x21];
+const TELNET_DONT_LINE_MODE: &[u8] = &[0xff, 0xfe, 0x22];
+const TELNET_DONT_NEW_ENVIRON: &[u8] = &[0xff, 0xfe, 0x27];
+const TELNET_WONT_STATUS: &[u8] = &[0xff, 0xfc, 0x05];
 const TELNET_CRLF: &[u8] = &[0x0d, 0x0a];
 
 const BANNER: &str = "
@@ -411,17 +411,17 @@ fn get_telnet_username(telnet: &mut TelnetStream) -> Option<String> {
 }
 
 fn get_telnet_password(telnet: &mut TelnetStream) -> Option<String> {
-    telnet.write_all(TELNET_ECHO);
-    telnet.write_all(TELNET_SUPPRESS_GO_AHEAD);
-    telnet.write_all(TELNET_TERMINAL_TYPE);
-    telnet.write_all(TELNET_TERMINAL_SPEED);
+    telnet.write_all(TELNET_WILL_ECHO);
+    telnet.write_all(TELNET_WILL_SUPPRESS_GO_AHEAD);
+    telnet.write_all(TELNET_DO_TERMINAL_TYPE);
+    telnet.write_all(TELNET_DO_WINDOW_SIZE);
     telnet.write_all(TELNET_CARRIAGE_RETURN);
     telnet.write_all(b"Password: ");
-    telnet.write_all(TELNET_TOGGLE_FLOW_CONTROL);
-    telnet.write_all(TELNET_LINE_MODE);
-    telnet.write_all(TELNET_CARRIAGE_RETURN_LINE_FEED);
-    telnet.write_all(TELNET_OUTPUT_MARKING);
-    telnet.write_all(TELNET_NEGOTIATE_SUPPRESS_GO_AHEAD);
+    telnet.write_all(TELNET_DONT_TERMINAL_SPEED);
+    telnet.write_all(TELNET_DONT_FLOW_CONTROL);
+    telnet.write_all(TELNET_DONT_LINE_MODE);
+    telnet.write_all(TELNET_DONT_NEW_ENVIRON);
+    telnet.write_all(TELNET_WONT_STATUS);
 
     let password = telnet.read_line();
     telnet.write_all(TELNET_CRLF);
