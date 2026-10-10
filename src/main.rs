@@ -31,6 +31,9 @@ const LOGIN_DELAY: Duration = Duration::from_secs(2);
 const DB_URL: &str = "db/oxipot.db";
 const DEFAULT_PORT: u16 = 2223;
 
+// Free offline database from https://ip66.dev, updated daily. Optional.
+const MMDB_PATH: &str = "db/ip66.mmdb";
+
 const IP_INFO_PROVIDER: &str = "https://api.iplocation.net/?ip=";
 const IP_INFO_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -101,6 +104,69 @@ struct IPInfo {
 trait IpInfoProvider: Send + Sync {
     fn name(&self) -> &str;
     fn lookup(&self, ip: IpAddr) -> Option<IPInfo>;
+}
+
+/// A local MaxMind-format (.mmdb) database file, such as the one from ip66.dev.
+struct MmdbFile {
+    reader: maxminddb::Reader<Vec<u8>>,
+}
+
+// The parts of an .mmdb record that we use.
+#[derive(Deserialize)]
+struct MmdbRecord {
+    #[serde(default)]
+    country: MmdbCountry,
+    #[serde(default)]
+    autonomous_system_organization: String,
+}
+
+#[derive(Default, Deserialize)]
+struct MmdbCountry {
+    #[serde(default)]
+    iso_code: String,
+    #[serde(default)]
+    names: MmdbNames,
+}
+
+#[derive(Default, Deserialize)]
+struct MmdbNames {
+    #[serde(default)]
+    en: String,
+}
+
+impl MmdbFile {
+    fn open(path: &str) -> Result<Self, maxminddb::MaxMindDbError> {
+        let reader = maxminddb::Reader::open_readfile(path)?;
+        Ok(Self { reader })
+    }
+}
+
+impl IpInfoProvider for MmdbFile {
+    fn name(&self) -> &str {
+        MMDB_PATH
+    }
+
+    fn lookup(&self, ip: IpAddr) -> Option<IPInfo> {
+        let record = self
+            .reader
+            .lookup(ip)
+            .and_then(|result| result.decode::<MmdbRecord>());
+
+        match record {
+            // A record without a country is not useful, so let the next provider try.
+            Ok(Some(record)) if record.country.iso_code.is_empty() => None,
+            Ok(Some(record)) => Some(IPInfo {
+                country_name: record.country.names.en,
+                country_code: record.country.iso_code,
+                isp: record.autonomous_system_organization,
+            }),
+            Ok(None) => None,
+            Err(e) => {
+                warn!("Could not look up {ip} in {}: {e}", self.name());
+                None
+            }
+        }
+    }
 }
 
 /// The free iplocation.net web API.
@@ -435,7 +501,18 @@ fn listen(port: u16, lookup: IpInfoLookup) -> io::Result<()> {
 }
 
 fn ip_info_providers() -> Vec<Box<dyn IpInfoProvider>> {
-    vec![Box::new(IpLocationApi)]
+    let mut providers: Vec<Box<dyn IpInfoProvider>> = Vec::new();
+
+    match MmdbFile::open(MMDB_PATH) {
+        Ok(mmdb) => {
+            info!("Using {MMDB_PATH} for IP lookups");
+            providers.push(Box::new(mmdb));
+        }
+        Err(e) => info!("Not using {MMDB_PATH}: {e}"),
+    }
+
+    providers.push(Box::new(IpLocationApi));
+    providers
 }
 
 // Required rather than relying on the default disposition: oxipot runs as PID 1
