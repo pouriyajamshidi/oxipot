@@ -15,7 +15,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::exit;
@@ -192,11 +192,17 @@ impl IpInfoProvider for IpLocationApi {
 
 struct TelnetStream<'a> {
     stream: &'a TcpStream,
+    // Keeps the bytes that arrive after the end of a line, so the next
+    // read gets them instead of losing them.
+    reader: BufReader<&'a TcpStream>,
 }
 
 impl<'a> TelnetStream<'a> {
     fn new(stream: &'a TcpStream) -> Self {
-        Self { stream }
+        Self {
+            stream,
+            reader: BufReader::new(stream),
+        }
     }
 
     fn write_all(&mut self, buf: &[u8]) {
@@ -206,13 +212,32 @@ impl<'a> TelnetStream<'a> {
         }
     }
 
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.stream.read(buf) {
-            Ok(n) => Ok(n),
+    fn read_line(&mut self) -> String {
+        let mut line = Vec::new();
+
+        while let Some(byte) = self.read_byte() {
+            match byte {
+                // What is left of the previous line's "\r\n" or "\r\0".
+                b'\n' | 0 if line.is_empty() => continue,
+                b'\r' | b'\n' => break,
+                byte if byte.is_ascii() => line.push(byte),
+                _ => {}
+            }
+        }
+
+        String::from_utf8_lossy(&line).trim().to_string()
+    }
+
+    fn read_byte(&mut self) -> Option<u8> {
+        let mut byte = [0];
+
+        match self.reader.read(&mut byte) {
+            Ok(0) => None,
+            Ok(_) => Some(byte[0]),
             Err(e) => {
                 warn!("Could not read from the telnet stream: {e}");
                 self.close();
-                Err(e)
+                None
             }
         }
     }
@@ -344,51 +369,14 @@ fn lookup_ip_info(lookup: &IpInfoLookup, intruder: &mut Intruder) {
     }
 }
 
-fn read_until_cr(telnet: &mut TelnetStream) -> String {
-    let mut buffer = Vec::new();
-
-    'outer: loop {
-        let mut buf = [0; 1024];
-
-        let n = match telnet.read(&mut buf) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => n,
-        };
-
-        let text = match std::str::from_utf8(&buf[..n]) {
-            Ok(text) => text,
-            Err(e) => {
-                warn!("Problem reading telnet stream data: {e}");
-                continue;
-            }
-        };
-
-        for c in text.chars() {
-            if c == '\r' || c == '\n' {
-                break 'outer;
-            }
-
-            if c.is_ascii() {
-                buffer.push(c as u8);
-            }
-        }
-    }
-
-    String::from_utf8_lossy(&buffer).trim().to_string()
-}
-
-fn get_telnet_username(stream: &TcpStream) -> String {
-    let mut telnet = TelnetStream::new(stream);
-
+fn get_telnet_username(telnet: &mut TelnetStream) -> String {
     telnet.write_all(BANNER.as_bytes());
     telnet.write_all(b"login: ");
 
-    read_until_cr(&mut telnet)
+    telnet.read_line()
 }
 
-fn get_telnet_password(stream: &TcpStream) -> String {
-    let mut telnet = TelnetStream::new(stream);
-
+fn get_telnet_password(telnet: &mut TelnetStream) -> String {
     telnet.write_all(TELNET_ECHO);
     telnet.write_all(TELNET_SUPPRESS_GO_AHEAD);
     telnet.write_all(TELNET_TERMINAL_TYPE);
@@ -401,7 +389,7 @@ fn get_telnet_password(stream: &TcpStream) -> String {
     telnet.write_all(TELNET_OUTPUT_MARKING);
     telnet.write_all(TELNET_NEGOTIATE_SUPPRESS_GO_AHEAD);
 
-    let password = read_until_cr(&mut telnet);
+    let password = telnet.read_line();
     telnet.write_all(TELNET_CRLF);
 
     password
@@ -437,9 +425,11 @@ fn handle_connection(stream: TcpStream, lookup: &IpInfoLookup) {
     let _ = stream.set_read_timeout(timeout);
     let _ = stream.set_write_timeout(timeout);
 
+    let mut telnet = TelnetStream::new(&stream);
+
     let mut intruder = Intruder {
-        username: get_telnet_username(&stream),
-        password: get_telnet_password(&stream),
+        username: get_telnet_username(&mut telnet),
+        password: get_telnet_password(&mut telnet),
         ip_info: IPInfo::default(),
         ip: peer.ip(),
         source_port: peer.port(),

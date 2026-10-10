@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow had failed. It now triggers directly on pushes to `master` and on
   version tags.
 - IPv6 loopback addresses are no longer sent to the IP lookup provider.
+- Bytes that arrive after the username, such as a password sent right after it,
+  are no longer thrown away.
 
 ## [0.4.0]
 
