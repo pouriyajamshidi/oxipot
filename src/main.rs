@@ -7,19 +7,21 @@
 // Official repository: https://github.com/pouriyajamshidi/oxipot
 //
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use log::{error, info, warn};
 use rusqlite::Connection;
 use serde::Deserialize;
+use serde_json::json;
 use signal_hook::consts::{SIGINT, SIGTERM};
 use signal_hook::iterator::Signals;
 use std::collections::HashMap;
-use std::fs;
+use std::env;
+use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::exit;
-use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, OnceLock};
 use std::thread::{self, sleep};
 use std::time::Duration;
 
@@ -31,6 +33,8 @@ const LOGIN_DELAY: Duration = Duration::from_secs(2);
 const LOGIN_ATTEMPTS: u32 = 3;
 
 const DB_URL: &str = "db/oxipot.db";
+// Only written when OXIPOT_JSON_LOG=true.
+const JSON_LOG_PATH: &str = "db/oxipot.json";
 const DEFAULT_PORT: u16 = 2223;
 
 // Free offline database from https://ip66.dev, updated daily. Optional.
@@ -74,6 +78,8 @@ static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
         .build()
         .into()
 });
+
+static JSON_LOG: OnceLock<Mutex<File>> = OnceLock::new();
 
 type IPInfoCache = HashMap<IpAddr, IPInfo>;
 
@@ -346,6 +352,42 @@ fn log_to_db(intruder: &Intruder) -> rusqlite::Result<()> {
     Ok(())
 }
 
+// One JSON object per line, which tools like Filebeat and Splunk read as is.
+fn open_json_log() -> io::Result<()> {
+    if env::var("OXIPOT_JSON_LOG").as_deref() != Ok("true") {
+        return Ok(());
+    }
+
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(JSON_LOG_PATH)?;
+    info!("Writing JSON logs to {JSON_LOG_PATH}");
+
+    let _ = JSON_LOG.set(Mutex::new(file));
+
+    Ok(())
+}
+
+fn log_to_json(intruder: &Intruder) -> io::Result<()> {
+    let Some(file) = JSON_LOG.get() else {
+        return Ok(());
+    };
+
+    let line = json!({
+        "username": intruder.username,
+        "password": intruder.password,
+        "ip": intruder.ip,
+        "source_port": intruder.source_port,
+        "country_name": intruder.ip_info.country_name,
+        "country_code": intruder.ip_info.country_code,
+        "isp": intruder.ip_info.isp,
+        "time": intruder.time.to_rfc3339_opts(SecondsFormat::Secs, true),
+    });
+
+    writeln!(lock(file), "{line}")
+}
+
 fn ip_info_from_db(ip: IpAddr) -> Option<IPInfo> {
     let conn = Connection::open(DB_URL).ok()?;
 
@@ -494,6 +536,10 @@ fn handle_connection(stream: TcpStream, lookup: &IpInfoLookup) {
             error!("Could not store intruder {}: {e}", intruder.ip);
         }
 
+        if let Err(e) = log_to_json(&intruder) {
+            error!("Could not log intruder {} as JSON: {e}", intruder.ip);
+        }
+
         display_intruder_info(&intruder);
     }
 }
@@ -576,6 +622,11 @@ fn main() {
 
     if let Err(e) = create_intruders_table() {
         error!("Could not prepare the database: {e}");
+        exit(1);
+    }
+
+    if let Err(e) = open_json_log() {
+        error!("Could not open {JSON_LOG_PATH}: {e}");
         exit(1);
     }
 

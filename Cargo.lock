@@ -677,6 +677,7 @@ dependencies = [
  "maxminddb",
  "rusqlite",
  "serde",
+ "serde_json",
  "signal-hook",
  "ureq",
 ]

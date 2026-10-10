@@ -15,6 +15,7 @@ A network telnet `HoneyPot` written in Rust.
 - In-memory (`volatile`) and database (`non-volatile`) IP and location information caching
 - Handles a lot of concurrent network connections
 - Rate-limits persistent intruders
+- Optional JSON logs for the Elastic Stack, Splunk and similar tools
 - Build a big username and password database for IT, OT and IoT (thanks to malicious actors)
 - Extremely resource friendly and efficient to run
 - Containerized for portability and better security
@@ -145,6 +146,24 @@ The result will be similar to:
 ```
 
 > The `intruders` table also holds `source_port`, `country_code` and `isp`. Use `SELECT * FROM intruders;` to see everything.
+
+## JSON Logs
+
+To send the reports to tools like the Elastic Stack or Splunk, set `OXIPOT_JSON_LOG=true`. `oxipot` then also writes every login try to `oxipot.json`, next to `oxipot.db`, one JSON object per line:
+
+```json
+{"country_code":"FR","country_name":"France","ip":"185.44.81.104","isp":"Example ISP","password":"telnet","source_port":51432,"time":"2025-09-12T18:45:30Z","username":"telnet"}
+```
+
+- Using [docker compose](#using-docker-compose), add it under `services.oxipot`:
+
+  ```yaml
+  environment:
+    - OXIPOT_JSON_LOG=true
+  ```
+
+- Using [docker run](#using-docker), add `-e OXIPOT_JSON_LOG=true`.
+- Using [the executable](#using-the-executable), run `OXIPOT_JSON_LOG=true ./oxipot`.
 
 ## Disclaimer
 
