@@ -57,6 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Telnet commands sent by the client are skipped. Before, a read that held any
   telnet command was thrown away as a whole, so bots that answer the telnet
   options in the same packet as their password were saved without a password.
+- Connections that send no username, such as port scans, are no longer saved
+  to the database or looked up.
 
 ## [0.4.0]
 

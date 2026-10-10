@@ -217,11 +217,12 @@ impl<'a> TelnetStream<'a> {
         }
     }
 
-    fn read_line(&mut self) -> String {
+    // Returns None when the client leaves before ending the line.
+    fn read_line(&mut self) -> Option<String> {
         let mut line = Vec::new();
 
-        while let Some(byte) = self.read_byte() {
-            match byte {
+        loop {
+            match self.read_byte()? {
                 // What is left of the previous line's "\r\n" or "\r\0".
                 b'\n' | 0 if line.is_empty() => continue,
                 b'\r' | b'\n' => break,
@@ -231,7 +232,7 @@ impl<'a> TelnetStream<'a> {
             }
         }
 
-        String::from_utf8_lossy(&line).trim().to_string()
+        Some(String::from_utf8_lossy(&line).trim().to_string())
     }
 
     // Clients answer our telnet options, often in the same packet as their
@@ -394,14 +395,14 @@ fn lookup_ip_info(lookup: &IpInfoLookup, intruder: &mut Intruder) {
     }
 }
 
-fn get_telnet_username(telnet: &mut TelnetStream) -> String {
+fn get_telnet_username(telnet: &mut TelnetStream) -> Option<String> {
     telnet.write_all(BANNER.as_bytes());
     telnet.write_all(b"login: ");
 
     telnet.read_line()
 }
 
-fn get_telnet_password(telnet: &mut TelnetStream) -> String {
+fn get_telnet_password(telnet: &mut TelnetStream) -> Option<String> {
     telnet.write_all(TELNET_ECHO);
     telnet.write_all(TELNET_SUPPRESS_GO_AHEAD);
     telnet.write_all(TELNET_TERMINAL_TYPE);
@@ -452,9 +453,18 @@ fn handle_connection(stream: TcpStream, lookup: &IpInfoLookup) {
 
     let mut telnet = TelnetStream::new(&stream);
 
+    // Port scanners connect and leave, so there is nothing worth saving.
+    let username = match get_telnet_username(&mut telnet) {
+        Some(username) if !username.is_empty() => username,
+        _ => {
+            info!("{} sent no username", peer.ip());
+            return;
+        }
+    };
+
     let mut intruder = Intruder {
-        username: get_telnet_username(&mut telnet),
-        password: get_telnet_password(&mut telnet),
+        username,
+        password: get_telnet_password(&mut telnet).unwrap_or_default(),
         ip_info: IPInfo::default(),
         ip: peer.ip(),
         source_port: peer.port(),
