@@ -1,4 +1,5 @@
-/target
+target
 notes/
 tools/
 db/
+temp/
