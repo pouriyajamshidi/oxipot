@@ -67,6 +67,13 @@ static HTTP: LazyLock<ureq::Agent> = LazyLock::new(|| {
 
 type IPInfoCache = HashMap<IpAddr, IPInfo>;
 
+/// Everything needed to find the details of an intruder's IP address.
+struct IpInfoLookup {
+    cache: Mutex<IPInfoCache>,
+    // Asked in order until one of them knows the IP address.
+    providers: Vec<Box<dyn IpInfoProvider>>,
+}
+
 struct Intruder {
     username: String,
     password: String,
@@ -88,6 +95,33 @@ struct IPInfo {
     #[serde(rename = "country_code2")]
     country_code: String,
     isp: String,
+}
+
+/// A source of country and ISP details for an IP address.
+trait IpInfoProvider: Send + Sync {
+    fn name(&self) -> &str;
+    fn lookup(&self, ip: IpAddr) -> Option<IPInfo>;
+}
+
+/// The free iplocation.net web API.
+struct IpLocationApi;
+
+impl IpInfoProvider for IpLocationApi {
+    fn name(&self) -> &str {
+        "iplocation.net"
+    }
+
+    fn lookup(&self, ip: IpAddr) -> Option<IPInfo> {
+        let response = HTTP.get(format!("{IP_INFO_PROVIDER}{ip}")).call();
+
+        match response.and_then(|mut response| response.body_mut().read_json()) {
+            Ok(ip_info) => Some(ip_info),
+            Err(e) => {
+                warn!("Could not look up {ip} on {}: {e}", self.name());
+                None
+            }
+        }
+    }
 }
 
 struct TelnetStream<'a> {
@@ -213,16 +247,9 @@ fn is_private_ip(ip: IpAddr) -> bool {
     }
 }
 
-fn whois(ip: IpAddr) -> Result<IPInfo, ureq::Error> {
-    info!("Looking up {ip}");
+fn lookup_ip_info(lookup: &IpInfoLookup, intruder: &mut Intruder) {
+    let cache = &lookup.cache;
 
-    HTTP.get(format!("{IP_INFO_PROVIDER}{ip}"))
-        .call()?
-        .body_mut()
-        .read_json()
-}
-
-fn lookup_ip_info(cache: &Mutex<IPInfoCache>, intruder: &mut Intruder) {
     if let Some(ip_info) = lock(cache).get(&intruder.ip).cloned() {
         info!("Found {} in the in-memory cache", intruder.ip);
         intruder.ip_info = ip_info;
@@ -240,12 +267,14 @@ fn lookup_ip_info(cache: &Mutex<IPInfoCache>, intruder: &mut Intruder) {
         return;
     }
 
-    match whois(intruder.ip) {
-        Ok(ip_info) => {
+    for provider in &lookup.providers {
+        info!("Looking up {} on {}", intruder.ip, provider.name());
+
+        if let Some(ip_info) = provider.lookup(intruder.ip) {
             lock(cache).insert(intruder.ip, ip_info.clone());
             intruder.ip_info = ip_info;
+            return;
         }
-        Err(e) => warn!("Could not look up {}: {e}", intruder.ip),
     }
 }
 
@@ -323,7 +352,7 @@ fn display_intruder_info(intruder: &Intruder) {
     info!("ISP: {}", intruder.ip_info.isp);
 }
 
-fn handle_connection(stream: TcpStream, cache: &Mutex<IPInfoCache>) {
+fn handle_connection(stream: TcpStream, lookup: &IpInfoLookup) {
     let peer = match stream.peer_addr() {
         Ok(peer) => peer,
         Err(e) => {
@@ -353,7 +382,7 @@ fn handle_connection(stream: TcpStream, cache: &Mutex<IPInfoCache>) {
 
     sleep(LOGIN_DELAY);
 
-    lookup_ip_info(cache, &mut intruder);
+    lookup_ip_info(lookup, &mut intruder);
 
     if let Err(e) = log_to_db(&intruder) {
         error!("Could not store intruder {}: {e}", intruder.ip);
@@ -362,11 +391,11 @@ fn handle_connection(stream: TcpStream, cache: &Mutex<IPInfoCache>) {
     display_intruder_info(&intruder);
 }
 
-fn listen(port: u16) -> io::Result<()> {
+fn listen(port: u16, lookup: IpInfoLookup) -> io::Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", port))?;
     info!("Listening on port {port}");
 
-    let cache = Arc::new(Mutex::new(IPInfoCache::new()));
+    let lookup = Arc::new(lookup);
 
     let rate_limiter = Arc::new(Mutex::new(HashMap::<IpAddr, u32>::new()));
     let rate_limiter_cleaner = Arc::clone(&rate_limiter);
@@ -400,9 +429,13 @@ fn listen(port: u16) -> io::Result<()> {
             continue;
         }
 
-        let cache = Arc::clone(&cache);
-        thread::spawn(move || handle_connection(stream, &cache));
+        let lookup = Arc::clone(&lookup);
+        thread::spawn(move || handle_connection(stream, &lookup));
     }
+}
+
+fn ip_info_providers() -> Vec<Box<dyn IpInfoProvider>> {
+    vec![Box::new(IpLocationApi)]
 }
 
 // Required rather than relying on the default disposition: oxipot runs as PID 1
@@ -430,7 +463,12 @@ fn main() {
 
     thread::spawn(handle_signal);
 
-    if let Err(e) = listen(DEFAULT_PORT) {
+    let lookup = IpInfoLookup {
+        cache: Mutex::new(IPInfoCache::new()),
+        providers: ip_info_providers(),
+    };
+
+    if let Err(e) = listen(DEFAULT_PORT, lookup) {
         error!("Could not listen on port {DEFAULT_PORT}: {e}");
         exit(1);
     }
