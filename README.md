@@ -11,6 +11,7 @@ A network telnet `HoneyPot` written in Rust.
 
 - Detect **IT**, **OT** and **IoT** bots 🤖
 - Capture IP and location information of bots, attackers and intruders trying to gain access to your network
+- Offline IP lookups with the free [ip66.dev](https://ip66.dev) database, with an online fallback
 - In-memory (`volatile`) and database (`non-volatile`) IP and location information caching
 - Handles a lot of concurrent network connections
 - Rate-limits persistent intruders
@@ -87,6 +88,22 @@ Directly using the executable is not recommended. This method should be used onl
    ```
 
 > A folder named `db` will be created in the same directory that will host `oxipot.db` containing the intruder reports.
+
+## IP Lookups
+
+To find the country and ISP of an intruder, `oxipot` checks these in order and stops at the first one that knows the IP address:
+
+1. The in-memory cache and the `oxipot.db` database.
+2. The `ip66.mmdb` file in the database directory, if it exists. It is free and updated daily by [ip66.dev](https://ip66.dev) (CC BY 4.0).
+3. The [iplocation.net](https://www.iplocation.net) web API.
+
+To use the offline file, download it into the database directory and restart `oxipot`:
+
+```bash
+curl -o /var/log/oxipot/ip66.mmdb https://downloads.ip66.dev/db/ip66.mmdb
+```
+
+> Use `db/ip66.mmdb` instead if you run [the executable](#using-the-executable).
 
 ## View The Report
 

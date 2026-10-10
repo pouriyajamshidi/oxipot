@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every `v*.*.*` tag and attaches them to the GitHub release.
 - Formatting and Clippy gates to the `Rust` workflow.
 - Dependabot now also tracks the Docker base images.
+- IP lookups first try the free offline [ip66.dev](https://ip66.dev) database at
+  `db/ip66.mmdb`, and fall back to iplocation.net when the file is missing or
+  does not know the IP address. Each lookup source is an `IpInfoProvider`, so
+  adding another one is a small change.
 
 ### Changed
 
