@@ -65,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the database or looked up.
 - Once a telnet connection breaks, oxipot stops writing to it, instead of
   logging a warning and an error for every following write.
+- A client that leaves early is no longer logged as an error when its
+  connection is shut down.
 
 ## [0.4.0]
 

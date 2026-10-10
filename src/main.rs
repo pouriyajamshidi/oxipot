@@ -279,7 +279,10 @@ impl<'a> TelnetStream<'a> {
     fn close(&mut self) {
         self.closed = true;
 
-        if let Err(e) = self.stream.shutdown(Shutdown::Both) {
+        // NotConnected only means the client has already left.
+        if let Err(e) = self.stream.shutdown(Shutdown::Both)
+            && e.kind() != io::ErrorKind::NotConnected
+        {
             error!("Encountered {e:?} while shutting down the TCP stream");
         }
     }
