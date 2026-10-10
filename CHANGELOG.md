@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of an Ubuntu image that installs `rustup` on every build.
 - Release assets are named per architecture: `oxipot-linux-x86_64.tar.gz` and
   `oxipot-linux-aarch64.tar.gz`.
+- After each login attempt, oxipot answers `Login incorrect` and asks again, up
+  to three tries per connection like BusyBox login. Before, it closed the
+  connection after the first try, so bots that try several passwords on one
+  connection were only logged once.
 
 ### Fixed
 

@@ -27,6 +27,8 @@ const CONNECTION_LIMIT: u32 = 10;
 const CONNECTION_FLUSH_TIME_PERIOD: Duration = Duration::from_secs(60);
 const CONNECTION_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(20);
 const LOGIN_DELAY: Duration = Duration::from_secs(2);
+// Same as BusyBox login, which most IoT devices use.
+const LOGIN_ATTEMPTS: u32 = 3;
 
 const DB_URL: &str = "db/oxipot.db";
 const DEFAULT_PORT: u16 = 2223;
@@ -404,7 +406,6 @@ fn lookup_ip_info(lookup: &IpInfoLookup, intruder: &mut Intruder) {
 }
 
 fn get_telnet_username(telnet: &mut TelnetStream) -> Option<String> {
-    telnet.write_all(BANNER.as_bytes());
     telnet.write_all(b"login: ");
 
     telnet.read_line()
@@ -460,34 +461,38 @@ fn handle_connection(stream: TcpStream, lookup: &IpInfoLookup) {
     let _ = stream.set_write_timeout(timeout);
 
     let mut telnet = TelnetStream::new(&stream);
+    telnet.write_all(BANNER.as_bytes());
 
-    // Port scanners connect and leave, so there is nothing worth saving.
-    let username = match get_telnet_username(&mut telnet) {
-        Some(username) if !username.is_empty() => username,
-        _ => {
-            info!("{} sent no username", peer.ip());
-            return;
+    for _ in 0..LOGIN_ATTEMPTS {
+        // Port scanners connect and leave, so there is nothing worth saving.
+        let username = match get_telnet_username(&mut telnet) {
+            Some(username) if !username.is_empty() => username,
+            _ => {
+                info!("No username from {}, closing the connection", peer.ip());
+                return;
+            }
+        };
+
+        let mut intruder = Intruder {
+            username,
+            password: get_telnet_password(&mut telnet).unwrap_or_default(),
+            ip_info: IPInfo::default(),
+            ip: peer.ip(),
+            source_port: peer.port(),
+            time: Utc::now(),
+        };
+
+        sleep(LOGIN_DELAY);
+        telnet.write_all(b"Login incorrect\r\n");
+
+        lookup_ip_info(lookup, &mut intruder);
+
+        if let Err(e) = log_to_db(&intruder) {
+            error!("Could not store intruder {}: {e}", intruder.ip);
         }
-    };
 
-    let mut intruder = Intruder {
-        username,
-        password: get_telnet_password(&mut telnet).unwrap_or_default(),
-        ip_info: IPInfo::default(),
-        ip: peer.ip(),
-        source_port: peer.port(),
-        time: Utc::now(),
-    };
-
-    sleep(LOGIN_DELAY);
-
-    lookup_ip_info(lookup, &mut intruder);
-
-    if let Err(e) = log_to_db(&intruder) {
-        error!("Could not store intruder {}: {e}", intruder.ip);
+        display_intruder_info(&intruder);
     }
-
-    display_intruder_info(&intruder);
 }
 
 fn listen(port: u16, lookup: IpInfoLookup) -> io::Result<()> {
