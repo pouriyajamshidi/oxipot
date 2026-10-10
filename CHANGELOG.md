@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   options in the same packet as their password were saved without a password.
 - Connections that send no username, such as port scans, are no longer saved
   to the database or looked up.
+- Once a telnet connection breaks, oxipot stops writing to it, instead of
+  logging a warning and an error for every following write.
 
 ## [0.4.0]
 

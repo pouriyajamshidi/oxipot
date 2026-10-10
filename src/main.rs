@@ -200,6 +200,7 @@ struct TelnetStream<'a> {
     // Keeps the bytes that arrive after the end of a line, so the next
     // read gets them instead of losing them.
     reader: BufReader<&'a TcpStream>,
+    closed: bool,
 }
 
 impl<'a> TelnetStream<'a> {
@@ -207,10 +208,15 @@ impl<'a> TelnetStream<'a> {
         Self {
             stream,
             reader: BufReader::new(stream),
+            closed: false,
         }
     }
 
     fn write_all(&mut self, buf: &[u8]) {
+        if self.closed {
+            return;
+        }
+
         if let Err(e) = self.stream.write_all(buf) {
             warn!("Could not write to the telnet stream: {e}");
             self.close();
@@ -269,6 +275,8 @@ impl<'a> TelnetStream<'a> {
     }
 
     fn close(&mut self) {
+        self.closed = true;
+
         if let Err(e) = self.stream.shutdown(Shutdown::Both) {
             error!("Encountered {e:?} while shutting down the TCP stream");
         }
